@@ -175,7 +175,7 @@ def ask_name(call):
     sent = bot.send_message(call.message.chat.id, texts[lang]["welcome"])
     user_data[user_id]["name_msg"] = sent.message_id
     try:
-    bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id)
 except Exception as e:
     print(f"Ошибка при answer_callback_query: {e}")
 # --- Обработка ввода имени пользователя ---
