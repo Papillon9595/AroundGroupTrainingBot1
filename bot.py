@@ -2,8 +2,6 @@ import time
 import telebot
 import os
 from telebot import types
-from dotenv import load_dotenv
-import logging
 import json
 
 users = {}
@@ -14,9 +12,6 @@ try:
         users = json.load(f)
 except FileNotFoundError:
     users = {}
-
-# Загрузка переменных окружения из .env файла
-load_dotenv()
 
 # Получение токена из переменной окружения
 TOKEN = os.getenv("BOT_TOKEN")
