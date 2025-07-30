@@ -1,21 +1,34 @@
 import time
 import telebot
-import json
 import os
 from telebot import types
+from dotenv import load_dotenv
 import logging
+import json
 
+users = {}
 users_file = "users.json"
 
-if os.path.exists(users_file):
+try:
     with open(users_file, "r", encoding="utf-8") as f:
-        users = json.load(f)  # словарь: {"123456": "Имя"}
-else:
+        users = json.load(f)
+except FileNotFoundError:
     users = {}
 
-TOKEN = '8126649149:AAF49fpPlIQZNsHpIuZGj9-Bhl0WrPzHtBU'
-bot = telebot.TeleBot(TOKEN)
+# Загрузка переменных окружения из .env файла
+load_dotenv()
 
+# Получение токена из переменной окружения
+TOKEN = os.getenv("BOT_TOKEN")
+
+print("TOKEN =", TOKEN)
+
+# Проверка на случай, если токен не найден
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не найден в переменных окружения")
+
+# Инициализация бота
+bot = telebot.TeleBot(TOKEN)
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 
 file_paths = {
@@ -124,7 +137,16 @@ search_keywords = {
 def send_stats(message):
     count = len(users)
     bot.send_message(message.chat.id, f"Всего пользователей: {count}")
-
+    
+@bot.message_handler(commands=['menu'])
+def show_menu(message):
+    user_id = message.from_user.id
+    if user_id in user_data:
+        lang = user_data[user_id].get("lang", "ru")
+        name = user_data[user_id].get("name", "User")
+        send_main_menu(user_id, lang, name)
+    else:
+        bot.send_message(message.chat.id, "Пожалуйста, введите /start для начала.")
 # --- Обработчик команды /start ---
 @bot.message_handler(commands=['start'])
 def start(message):
