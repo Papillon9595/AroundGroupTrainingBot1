@@ -2,6 +2,9 @@ import time
 import telebot
 import os
 from telebot import types
+from dotenv import load_dotenv
+import logging  # обязательно импортируй!
+
 import json
 
 users = {}
@@ -13,17 +16,17 @@ try:
 except FileNotFoundError:
     users = {}
 
-# Получение токена из переменной окружения
-TOKEN = os.getenv("BOT_TOKEN")
+load_dotenv()
 
+TOKEN = os.getenv("BOT_TOKEN")
 print("TOKEN =", TOKEN)
 
-# Проверка на случай, если токен не найден
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-# Инициализация бота
 bot = telebot.TeleBot(TOKEN)
+
+# Настройка логгера
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 
 file_paths = {
