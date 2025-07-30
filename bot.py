@@ -19,7 +19,6 @@ except FileNotFoundError:
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-print("TOKEN =", TOKEN)
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
