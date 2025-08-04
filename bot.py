@@ -289,15 +289,15 @@ def callback_handler(call):
         markup = types.InlineKeyboardMarkup()
         if lang == "ru":
             markup.add(types.InlineKeyboardButton("Мехти (техподдержка)", url="https://t.me/mexti_s"))
-            markup.add(types.InlineKeyboardButton("Джахандар(тренер)", url=""))
+            markup.add(types.InlineKeyboardButton("Джахандар(тренер)", url="hht://t.me/cahandar2001""))
             markup.add(types.InlineKeyboardButton("Хайям Махмудов (тренер)", url="https://t.me/mxm086"))
         elif lang == "az":
             markup.add(types.InlineKeyboardButton("Mehdi Suleymanov (texniki dəstək)", url="https://t.me/mexti_s"))
-            markup.add(types.InlineKeyboardButton("Cahandar(təlimçi)", url=""))
+            markup.add(types.InlineKeyboardButton("Cahandar(təlimçi)", url="hht://t.me/cahandar2001""))
             markup.add(types.InlineKeyboardButton("Xəyyam Mahmudov (təlimçi)", url="https://t.me/mxm086"))
         elif lang == "en":
             markup.add(types.InlineKeyboardButton("Mehti (tech Support)", url="https://t.me/mexti_s"))
-            markup.add(types.InlineKeyboardButton("Cahandar(trainer)", url=""))
+            markup.add(types.InlineKeyboardButton("Cahandar(trainer)", url="hht://t.me/cahandar2001"))
             markup.add(types.InlineKeyboardButton("Khayyam Mahmudov (trainer)", url="https://t.me/mxm086"))
         markup.add(types.InlineKeyboardButton(texts[lang]["back"], callback_data="main_menu"))
         bot.send_message(call.message.chat.id, texts[lang]["contact_text"], reply_markup=markup)
@@ -395,4 +395,5 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
