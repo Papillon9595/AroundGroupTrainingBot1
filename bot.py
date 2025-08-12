@@ -3,7 +3,7 @@ import telebot
 import os
 from telebot import types
 from dotenv import load_dotenv
-
+import logging
 import json
 
 users = {}
@@ -377,6 +377,7 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
 
 
