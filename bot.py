@@ -3,7 +3,6 @@ import telebot
 import os
 from telebot import types
 from dotenv import load_dotenv
-import logging  # обязательно импортируй!
 
 import json
 
@@ -25,7 +24,6 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
-# Настройка логгера
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 
 file_paths = {
@@ -144,7 +142,6 @@ def show_menu(message):
         send_main_menu(user_id, lang, name)
     else:
         bot.send_message(message.chat.id, "Пожалуйста, введите /start для начала.")
-# --- Обработчик команды /start ---
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
@@ -172,7 +169,6 @@ def start(message):
 def count_users(message):
     bot.send_message(message.chat.id, f"Всего пользователей: {len(users)}")
 
-# --- Обработка сообщений в группе (игнорируем личные) ---
 @bot.message_handler(func=lambda message: message.chat.type in ["group", "supergroup"])
 def handle_group_messages(message):
     text_lower = message.text.lower() if message.text else ""
@@ -181,7 +177,6 @@ def handle_group_messages(message):
     elif f"@{bot.get_me().username}" in text_lower:
         bot.reply_to(message, "Привет! Я бот для обучения. Напиши /start в личку, чтобы начать.")
 
-# --- Обработка выбора языка ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
 def ask_name(call):
     user_id = call.from_user.id
@@ -197,7 +192,6 @@ def ask_name(call):
         bot.answer_callback_query(call.id)
     except Exception as e:
         print(f"Ошибка при answer_callback_query: {e}")
-# --- Обработка ввода имени пользователя ---
 @bot.message_handler(func=lambda message: message.from_user.id in user_data and user_data[message.from_user.id].get("state") == "awaiting_name")
 def get_name(message):
     user_id = message.from_user.id
@@ -209,7 +203,6 @@ def get_name(message):
 
     lang = user_data[user_id]["lang"]
 
-    # Записываем факт использования бота (для отчёта)
     logging.info(f"User {user_id} named '{name}' started using the bot.")
 
     try:
@@ -221,7 +214,6 @@ def get_name(message):
     user_data[user_id]["state"] = "main"
     send_main_menu(user_id, lang, name)
 
-# --- Отправка главного меню ---
 def send_main_menu(user_id, lang, name):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -233,7 +225,6 @@ def send_main_menu(user_id, lang, name):
     bot.send_message(user_id, texts[lang]["name_reply"].format(name=name), reply_markup=markup)
     user_data[user_id]["state"] = "main"
 
-# --- Обработка всех callback запросов ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
@@ -310,7 +301,6 @@ def callback_handler(call):
 
     bot.answer_callback_query(call.id)
 
-# --- Обработка поиска ---
 @bot.message_handler(func=lambda message: message.from_user.id in user_data and user_data[message.from_user.id].get("state") == "search")
 def handle_search(message):
     user_id = message.from_user.id
@@ -333,10 +323,8 @@ def handle_search(message):
     else:
         bot.send_message(message.chat.id, f"По запросу «{message.text}» ничего не найдено. Попробуйте другое ключевое слово.")
 
-    # Оставаться в режиме поиска для повторного ввода
     user_data[user_id]["state"] = "search"
 
-# --- Приветствие новых участников группы ---
 @bot.message_handler(content_types=['new_chat_members'])
 def greet_new_member(message):
     for new_member in message.new_chat_members:
@@ -352,7 +340,6 @@ def greet_new_member(message):
         except Exception:
             bot.send_message(message.chat.id, f"👋 {new_member.first_name}, добро пожаловать! Напиши мне в личку, чтобы получить материалы.")
 
-# --- Админская команда ---
 @bot.message_handler(commands=['обучение'])
 def admin_only_command(message):
     try:
@@ -366,7 +353,6 @@ def admin_only_command(message):
         bot.reply_to(message, "⚠️ Произошла ошибка при проверке прав.")
         logging.error(f"Ошибка в команде /обучение: {e}")
 
-# --- Обработка остальных типов сообщений ---
 @bot.message_handler(content_types=['video', 'animation', 'document'])
 def handle_media_messages(message):
     if message.video:
@@ -384,7 +370,6 @@ def handle_media_messages(message):
     else:
         bot.send_message(message.chat.id, "❗ Пришли видео, GIF или mp4-документ.")
 
-# --- Запуск бота с перезапуском при ошибках ---
 if __name__ == "__main__":
     while True:
         try:
@@ -392,6 +377,7 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
 
 
