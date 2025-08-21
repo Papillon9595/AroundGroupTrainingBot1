@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify
-import hmac, hashlib, urllib.parse
+import hmac, hashlib
 import threading
 import os
 import json
@@ -15,11 +15,12 @@ from telebot import types
 from telebot.types import CallbackQuery as TGCallbackQuery
 from telebot.apihelper import ApiTelegramException
 from dotenv import load_dotenv
+from urllib.parse import parse_qsl
 
-# ─────────────────────────── ЛОГИ ───────────────────────────
+# ─────────────────── ЛОГИ ───────────────────
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 
-# ───────────────────── ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ ─────────────────
+# ─────────────────── USERS ───────────────────
 users: dict = {}
 users_file = "users.json"
 
@@ -33,7 +34,6 @@ def ensure_user_record(user_id: int):
         users[uid] = {"name": "", "verified": False, "phone": "", "phone_ok": False}
         _save_users()
     else:
-        # миграция старых записей
         rec = users[uid]
         if "name" not in rec:      rec["name"] = ""
         if "verified" not in rec:  rec["verified"] = False
@@ -45,32 +45,31 @@ try:
         loaded = json.load(f)
         if isinstance(loaded, dict):
             users = loaded
-            # миграция
-            for k,v in list(users.items()):
-                if isinstance(v, str):  # старый формат: "123":"Имя"
+            # миграция старого формата
+            for k, v in list(users.items()):
+                if isinstance(v, str):
                     users[k] = {"name": v, "verified": False, "phone": "", "phone_ok": False}
                 else:
-                    if "name"      not in v: users[k]["name"] = ""
-                    if "verified"  not in v: users[k]["verified"] = False
-                    if "phone"     not in v: users[k]["phone"] = ""
-                    if "phone_ok"  not in v: users[k]["phone_ok"] = False
+                    if "name" not in v:     users[k]["name"] = ""
+                    if "verified" not in v: users[k]["verified"] = False
+                    if "phone" not in v:    users[k]["phone"] = ""
+                    if "phone_ok" not in v: users[k]["phone_ok"] = False
             _save_users()
         else:
             users = {}
 except FileNotFoundError:
     users = {}
 
-# ───────────────────────── ОКРУЖЕНИЕ ────────────────────────
+# ─────────────────── ENV ───────────────────
 load_dotenv(override=True)
 
 def _parse_int_set(env_name: str):
-    raw = os.getenv(env_name, "") or ""
-    raw = raw.strip()
+    raw = (os.getenv(env_name) or "").strip()
     if not raw:
         return set()
     return set(int(x) for x in raw.replace(" ", "").split(",") if x)
 
-# телефонный whitelist
+# whitelist телефонов
 def normalize_phone(p: str) -> str:
     if not p:
         return ""
@@ -108,15 +107,14 @@ def load_allowed_phones() -> set[str]:
 
 ALLOWED_SET = load_allowed_phones()
 
-# базовые env
-TOKEN         = (os.getenv("BOT_TOKEN") or "").strip()
+TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-ADMIN_IDS     = _parse_int_set("ADMIN_IDS")
-ALLOW_GROUPS  = os.getenv("ALLOW_GROUPS", "0") == "1"
+ADMIN_IDS   = _parse_int_set("ADMIN_IDS")
+ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"
 
-# WebApp / OTP / webhook
+# WebApp/OTP/Webhook
 REQUIRE_CODE  = os.getenv("REQUIRE_CODE", "0") == "1"
 OTP_TTL_SECS  = int(os.getenv("OTP_TTL_SECS", "600"))
 OTP_LENGTH    = int(os.getenv("OTP_LENGTH", "6"))
@@ -125,14 +123,14 @@ USE_WEBHOOK   = os.getenv("USE_WEBHOOK", "0") == "1"
 PUBLIC_URL    = (os.getenv("PUBLIC_URL") or "").rstrip("/")
 WEBAPP_URL    = (os.getenv("WEBAPP_URL") or "").strip()
 
-# ─────────────────────── ИНИЦИАЛИЗАЦИЯ БОТА ─────────────────
+# ──────────────── BOT ────────────────
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 
-# ─────────────────────────── OTP ЛОГИКА ─────────────────────
+# ──────────────── OTP ────────────────
 otp_store = {}  # uid -> {'code': '123456', 'exp': ts, 'attempts': 3}
 
-def _gen_otp(length: int) -> str:
-    return "".join(secrets.choice(string.digits) for _ in range(length))
+def _gen_otp(n: int) -> str:
+    return "".join(secrets.choice(string.digits) for _ in range(n))
 
 def issue_otp(uid: int) -> str:
     code = _gen_otp(OTP_LENGTH)
@@ -155,7 +153,7 @@ def check_otp(uid: int, code: str):
     otp_store.pop(uid, None)
     return True, ""
 
-# ────────────────────────── КОНТЕНТ ─────────────────────────
+# ──────────────── КОНТЕНТ ────────────────
 file_paths = {
     "product": "https://clck.ru/3NB2zY",
     "sales": "https://clck.ru/3NB2wX",
@@ -221,7 +219,7 @@ search_keywords = {
     "accessories": ["accessories","аксессуары"],
 }
 
-# ─────────────────────────── УТИЛИТЫ ─────────────────────────
+# ──────────────── ACCESS ────────────────
 def maybe_answer_callback(update):
     try:
         if isinstance(update, TGCallbackQuery):
@@ -231,11 +229,12 @@ def maybe_answer_callback(update):
 
 def require_access(handler):
     """
-    Доступ: (админ) ИЛИ (подтверждённый телефон из whitelist) + (если включено, WebApp-OTP).
+    Доступ только для:
+      - админов, ИЛИ
+      - пользователей с phone_ok=True (номер в whitelist) + (если включено) verified=True (OTP через WebApp)
     """
     @wraps(handler)
     def wrapper(update, *args, **kwargs):
-        # контекст
         if isinstance(update, TGCallbackQuery):
             uid = update.from_user.id
             chat_id = update.message.chat.id
@@ -247,31 +246,26 @@ def require_access(handler):
 
         ensure_user_record(uid)
 
-        # админам всегда можно
         if uid in ADMIN_IDS:
             return handler(update, *args, **kwargs)
 
-        # блок групп если выключены
         if not ALLOW_GROUPS and chat_type in ("group", "supergroup"):
             return
 
         rec = users.get(str(uid), {})
 
-        # 1) требуем подтверждение номера (контактом) если включено
-        if REQUIRE_PHONE:
-            if not rec.get("phone_ok"):
-                kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-                kb.add(types.KeyboardButton("Подтвердить номер 📱", request_contact=True))
-                bot.send_message(
-                    chat_id,
-                    "Доступ только для номеров из списка.\n"
-                    "Нажмите «Подтвердить номер 📱», чтобы отправить свой номер из Telegram.",
-                    reply_markup=kb
-                )
-                maybe_answer_callback(update)
-                return
+        if REQUIRE_PHONE and not rec.get("phone_ok"):
+            kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+            kb.add(types.KeyboardButton("Подтвердить номер 📱", request_contact=True))
+            bot.send_message(
+                chat_id,
+                "Доступ только для номеров из списка.\n"
+                "Нажмите «Подтвердить номер 📱», чтобы отправить свой номер из Telegram.",
+                reply_markup=kb
+            )
+            maybe_answer_callback(update)
+            return
 
-        # 2) если включено — проходим OTP через WebApp
         if REQUIRE_CODE and not rec.get("verified", False):
             kb = types.InlineKeyboardMarkup()
             if WEBAPP_URL:
@@ -279,23 +273,20 @@ def require_access(handler):
                     "Открыть форму подтверждения",
                     web_app=types.WebAppInfo(url=WEBAPP_URL)
                 ))
+                bot.send_message(
+                    chat_id,
+                    "🔒 Требуется подтверждение входа. Откройте форму и завершите подтверждение.",
+                    reply_markup=kb
+                )
             else:
                 bot.send_message(chat_id, "WEBAPP_URL не настроен. Обратитесь к администратору.")
-                maybe_answer_callback(update)
-                return
-
-            bot.send_message(
-                chat_id,
-                "🔒 Требуется подтверждение входа. Откройте форму и завершите подтверждение.",
-                reply_markup=kb
-            )
             maybe_answer_callback(update)
             return
 
         return handler(update, *args, **kwargs)
     return wrapper
 
-# ───────────────────────── WebApp (Flask) ─────────────────────────
+# ──────────────── WebApp (Flask) ────────────────
 app = Flask(__name__)
 
 HTML_WEBAPP = r"""
@@ -343,10 +334,15 @@ boxes.addEventListener('click', ()=>hid.focus()); render();
 
 btnIssue.addEventListener('click', async ()=>{
   try{
-    const r = await fetch('/api/otp/issue', {method:'POST', headers:{'X-Init-Data': initData}});
+    if(!initData){ err.textContent='WebApp открыт вне Telegram. Запустите форму из бота.'; return; }
+    const r = await fetch('/api/otp/issue?init_data=' + encodeURIComponent(initData), {
+      method:'POST',
+      headers:{'X-Init-Data': initData, 'Content-Type':'application/json'},
+      body: JSON.stringify({init_data: initData})
+    });
     const j = await r.json();
     if(!j.ok){ err.textContent = j.error || 'Не удалось получить код'; return; }
-    hid.value = (j.code || '').toString().slice(0,6);
+    document.getElementById('hid').value = (j.code || '').toString().slice(0,6);
     render();
     err.textContent = 'Код сгенерирован. Нажмите «Подтвердить». Срок: ' + j.ttl_min + ' мин.';
     hid.focus();
@@ -356,10 +352,10 @@ btnIssue.addEventListener('click', async ()=>{
 btnSend.addEventListener('click', async ()=>{
   try{
     const code = hid.value;
-    const r = await fetch('/api/otp/verify', {
+    const r = await fetch('/api/otp/verify?init_data=' + encodeURIComponent(initData), {
       method:'POST',
-      headers:{'Content-Type':'application/json','X-Init-Data': initData},
-      body: JSON.stringify({code})
+      headers:{'X-Init-Data': initData, 'Content-Type':'application/json'},
+      body: JSON.stringify({code, init_data: initData})
     });
     const j = await r.json();
     if(!j.ok){ err.textContent = j.error || 'Код не принят'; return; }
@@ -370,13 +366,19 @@ btnSend.addEventListener('click', async ()=>{
 """
 
 def _verify_webapp_init_data(init_data: str):
+    """
+    Каноничная проверка подписи WebApp. Возвращает {"user_id": int} или None.
+    """
     try:
-        q = urllib.parse.parse_qs(init_data, keep_blank_values=True)
-        data = {k: v[0] for k,v in q.items()}
+        if not init_data:
+            return None
+        data = dict(parse_qsl(init_data, strict_parsing=True))
         recv_hash = data.pop('hash', None)
-        data_check = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
+        if not recv_hash:
+            return None
+        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
         secret = hashlib.sha256(TOKEN.encode()).digest()
-        calc_hash = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
+        calc_hash = hmac.new(secret, data_check_string.encode(), hashlib.sha256).hexdigest()
         if calc_hash != recv_hash:
             return None
         user_json = data.get('user')
@@ -388,43 +390,58 @@ def _verify_webapp_init_data(init_data: str):
         logging.error(f"verify_webapp_init_data error: {e}")
         return None
 
+def _extract_init_data():
+    """
+    Берём init_data из заголовка, query и/или body — что дойдёт.
+    """
+    init_data = request.headers.get('X-Init-Data', '') or ""
+    if not init_data:
+        init_data = request.args.get('init_data', '') or ""
+    if not init_data:
+        init_data = (request.get_json(silent=True) or {}).get('init_data', '') or ""
+    return init_data
+
 @app.get("/webapp")
 def webapp_page():
     return HTML_WEBAPP
 
 @app.post("/api/otp/issue")
 def api_issue():
-    init_data = request.headers.get('X-Init-Data', '')
+    init_data = _extract_init_data()
     info = _verify_webapp_init_data(init_data)
     if not info:
         return jsonify(ok=False, error="bad signature"), 403
     uid = info["user_id"]
-    # серверная проверка номера, если включено
+
+    # проверка номера (если включена)
     if REQUIRE_PHONE:
         ensure_user_record(uid)
         if not users[str(uid)].get("phone_ok"):
             return jsonify(ok=False, error="phone not approved"), 403
+
     code = issue_otp(uid)
     return jsonify(ok=True, code=code, ttl=OTP_TTL_SECS, ttl_min=max(1, OTP_TTL_SECS//60))
 
 @app.post("/api/otp/verify")
 def api_verify():
-    init_data = request.headers.get('X-Init-Data', '')
+    init_data = _extract_init_data()
     info = _verify_webapp_init_data(init_data)
     if not info:
         return jsonify(ok=False, error="bad signature"), 403
     uid = info["user_id"]
+
     payload = request.get_json(silent=True) or {}
     code = str(payload.get('code','')).strip()
     ok, msg = check_otp(uid, code)
     if not ok:
         return jsonify(ok=False, error=msg)
+
     ensure_user_record(uid)
     users[str(uid)]["verified"] = True
     _save_users()
     return jsonify(ok=True)
 
-# ───────── webhook endpoint (если включён USE_WEBHOOK) ─────────
+# ──────────────── Webhook endpoint (если используется) ────────────────
 WEBHOOK_PATH = f"/tg/{TOKEN}"
 
 @app.post(WEBHOOK_PATH)
@@ -436,7 +453,7 @@ def telegram_webhook():
         return 'ok', 200
     return 'bad', 400
 
-# ─────────────────────────── ХЭНДЛЕРЫ ────────────────────────
+# ──────────────── HANDLERS ────────────────
 @bot.message_handler(content_types=["contact"])
 def handle_contact(message):
     uid = message.from_user.id
@@ -461,7 +478,6 @@ def handle_contact(message):
         bot.send_message(message.chat.id, "❌ Ваш номер не в списке доступа. Обратитесь к администратору.")
         return
 
-    # если нужен OTP — предложим форму, иначе пустим дальше
     if REQUIRE_CODE and not users[str(uid)].get("verified"):
         kb = types.InlineKeyboardMarkup()
         if WEBAPP_URL:
@@ -709,21 +725,17 @@ def handle_search(message):
 
     user_data[user_id]["state"] = "search"
 
-# ─────────────────────────── ЗАПУСК ─────────────────────────
+# ──────────────── RUN ────────────────
 if __name__ == "__main__":
     try:
-        # чистим старый вебхук на всякий
         bot.remove_webhook()
 
         if USE_WEBHOOK:
             if not PUBLIC_URL:
-                raise SystemExit("PUBLIC_URL не задан. Укажи https://<твой-домен>.up.railway.app")
-            # регистрируем вебхук (и чистим накопившиеся апдейты)
+                raise SystemExit("PUBLIC_URL не задан. Укажи https://<your-app>.up.railway.app")
             bot.set_webhook(url=PUBLIC_URL + f"/tg/{TOKEN}", drop_pending_updates=True)
-            # запускаем Flask (и /webapp, и вебхук)
             app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")), threaded=True, use_reloader=False)
         else:
-            # локальная отладка — параллельно поднимем Flask и polling
             threading.Thread(
                 target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT","8080")), threaded=True, use_reloader=False),
                 daemon=True
