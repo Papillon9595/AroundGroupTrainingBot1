@@ -23,59 +23,107 @@ logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 users: dict = {}
 users_file = "users.json"
 
-try:
-    with open(users_file, "r", encoding="utf-8") as f:
-        users = json.load(f)
-        changed = False
-        for k, v in list(users.items()):
-            if isinstance(v, str):
-                users[k] = {"name": v, "verified": False}; changed = True
-            elif isinstance(v, dict):
-                if "name" not in v: users[k]["name"] = ""; changed = True
-                if "verified" not in v: users[k]["verified"] = False; changed = True
-        if changed:
-            with open(users_file, "w", encoding="utf-8") as wf:
-                json.dump(users, wf, ensure_ascii=False, indent=2)
-except FileNotFoundError:
-    users = {}
-
-def save_users():
+def _save_users():
     with open(users_file, "w", encoding="utf-8") as f:
         json.dump(users, f, ensure_ascii=False, indent=2)
 
 def ensure_user_record(user_id: int):
     uid = str(user_id)
     if uid not in users:
-        users[uid] = {"name": "", "verified": False}
-        save_users()
+        users[uid] = {"name": "", "verified": False, "phone": "", "phone_ok": False}
+        _save_users()
+    else:
+        # миграция старых записей
+        rec = users[uid]
+        if "name" not in rec:      rec["name"] = ""
+        if "verified" not in rec:  rec["verified"] = False
+        if "phone" not in rec:     rec["phone"] = ""
+        if "phone_ok" not in rec:  rec["phone_ok"] = False
+
+try:
+    with open(users_file, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+        if isinstance(loaded, dict):
+            users = loaded
+            # миграция
+            for k,v in list(users.items()):
+                if isinstance(v, str):  # старый формат: "123":"Имя"
+                    users[k] = {"name": v, "verified": False, "phone": "", "phone_ok": False}
+                else:
+                    if "name"      not in v: users[k]["name"] = ""
+                    if "verified"  not in v: users[k]["verified"] = False
+                    if "phone"     not in v: users[k]["phone"] = ""
+                    if "phone_ok"  not in v: users[k]["phone_ok"] = False
+            _save_users()
+        else:
+            users = {}
+except FileNotFoundError:
+    users = {}
 
 # ───────────────────────── ОКРУЖЕНИЕ ────────────────────────
 load_dotenv(override=True)
 
-TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
+def _parse_int_set(env_name: str):
+    raw = os.getenv(env_name, "") or ""
+    raw = raw.strip()
+    if not raw:
+        return set()
+    return set(int(x) for x in raw.replace(" ", "").split(",") if x)
+
+# телефонный whitelist
+def normalize_phone(p: str) -> str:
+    if not p:
+        return ""
+    digits = "".join(ch for ch in str(p) if ch.isdigit())
+    return f"+{digits}" if digits else ""
+
+def _parse_phone_set_from_env(env_name: str) -> set[str]:
+    raw = (os.getenv(env_name) or "").strip()
+    if not raw:
+        return set()
+    parts = [x for x in raw.replace(" ", "").split(",") if x]
+    return {normalize_phone(x) for x in parts}
+
+def _parse_phone_set_from_file(path: str) -> set[str]:
+    s = set()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                s.add(normalize_phone(line))
+    except FileNotFoundError:
+        pass
+    return s
+
+REQUIRE_PHONE       = os.getenv("REQUIRE_PHONE", "0") == "1"
+ALLOWED_PHONES_FILE = (os.getenv("ALLOWED_PHONES_FILE") or "").strip()
+
+def load_allowed_phones() -> set[str]:
+    s = _parse_phone_set_from_env("ALLOWED_PHONES")
+    if ALLOWED_PHONES_FILE:
+        s |= _parse_phone_set_from_file(ALLOWED_PHONES_FILE)
+    return {p for p in s if p and p != "+"}
+
+ALLOWED_SET = load_allowed_phones()
+
+# базовые env
+TOKEN         = (os.getenv("BOT_TOKEN") or "").strip()
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-def _parse_int_set(env_name: str):
-    raw = os.getenv(env_name, "").strip()
-    if not raw: return set()
-    return set(int(x) for x in raw.replace(" ", "").split(",") if x)
+ADMIN_IDS     = _parse_int_set("ADMIN_IDS")
+ALLOW_GROUPS  = os.getenv("ALLOW_GROUPS", "0") == "1"
 
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
-CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "")
-ADMIN_IDS = _parse_int_set("ADMIN_IDS")
-REQUIRE_CODE = os.getenv("REQUIRE_CODE", "0") == "1"
-ACCESS_CODE = (os.getenv("ACCESS_CODE") or "").strip()  # не используем, но можно оставить про запас
-ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"
-WEBAPP_URL = (os.getenv("WEBAPP_URL") or "").strip()
-
-# Параметры OTP для WebApp (код показываем в WebApp)
-OTP_TTL_SECS = int(os.getenv("OTP_TTL_SECS", "600"))
-OTP_LENGTH = int(os.getenv("OTP_LENGTH", "6"))
-OTP_ATTEMPTS = int(os.getenv("OTP_ATTEMPTS", "3"))
-USE_WEBHOOK = os.getenv("USE_WEBHOOK", "0") == "1"
-PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
-WEBAPP_URL = (os.getenv("WEBAPP_URL") or "").strip()
+# WebApp / OTP / webhook
+REQUIRE_CODE  = os.getenv("REQUIRE_CODE", "0") == "1"
+OTP_TTL_SECS  = int(os.getenv("OTP_TTL_SECS", "600"))
+OTP_LENGTH    = int(os.getenv("OTP_LENGTH", "6"))
+OTP_ATTEMPTS  = int(os.getenv("OTP_ATTEMPTS", "3"))
+USE_WEBHOOK   = os.getenv("USE_WEBHOOK", "0") == "1"
+PUBLIC_URL    = (os.getenv("PUBLIC_URL") or "").rstrip("/")
+WEBAPP_URL    = (os.getenv("WEBAPP_URL") or "").strip()
 
 # ─────────────────────── ИНИЦИАЛИЗАЦИЯ БОТА ─────────────────
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
@@ -93,13 +141,16 @@ def issue_otp(uid: int) -> str:
 
 def check_otp(uid: int, code: str):
     rec = otp_store.get(uid)
-    if not rec: return False, "Код не запрошен."
+    if not rec:
+        return False, "Код не запрошен."
     if time.time() > rec["exp"]:
-        otp_store.pop(uid, None); return False, "Код истёк. Запросите новый."
+        otp_store.pop(uid, None)
+        return False, "Код истёк. Запросите новый."
     if code != rec["code"]:
         rec["attempts"] -= 1
         if rec["attempts"] <= 0:
-            otp_store.pop(uid, None); return False, "Код заблокирован. Запросите новый."
+            otp_store.pop(uid, None)
+            return False, "Код заблокирован. Запросите новый."
         return False, f"Неверный код. Осталось попыток: {rec['attempts']}"
     otp_store.pop(uid, None)
     return True, ""
@@ -171,16 +222,6 @@ search_keywords = {
 }
 
 # ─────────────────────────── УТИЛИТЫ ─────────────────────────
-def is_member_of_channel(user_id: int) -> bool:
-    if not CHANNEL_ID:
-        logging.error("CHANNEL_ID не настроен"); return False
-    try:
-        m = bot.get_chat_member(CHANNEL_ID, user_id)
-        return m.status in ("member", "administrator", "creator")
-    except Exception as e:
-        logging.error(f"get_chat_member error: {e}")
-        return False
-
 def maybe_answer_callback(update):
     try:
         if isinstance(update, TGCallbackQuery):
@@ -189,35 +230,48 @@ def maybe_answer_callback(update):
         pass
 
 def require_access(handler):
-    """Доступ только для участников канала. Верификация — ТОЛЬКО через WebApp."""
+    """
+    Доступ: (админ) ИЛИ (подтверждённый телефон из whitelist) + (если включено, WebApp-OTP).
+    """
     @wraps(handler)
     def wrapper(update, *args, **kwargs):
+        # контекст
         if isinstance(update, TGCallbackQuery):
-            uid = update.from_user.id; chat_id = update.message.chat.id
+            uid = update.from_user.id
+            chat_id = update.message.chat.id
             chat_type = getattr(update.message.chat, "type", "private")
         else:
-            uid = update.from_user.id; chat_id = update.chat.id
+            uid = update.from_user.id
+            chat_id = update.chat.id
             chat_type = getattr(update.chat, "type", "private")
 
         ensure_user_record(uid)
 
+        # админам всегда можно
         if uid in ADMIN_IDS:
             return handler(update, *args, **kwargs)
 
+        # блок групп если выключены
         if not ALLOW_GROUPS and chat_type in ("group", "supergroup"):
             return
 
-        if not is_member_of_channel(uid):
-            try:
-                if users.get(str(uid), {}).get("verified"):
-                    users[str(uid)]["verified"] = False; save_users()
-            except Exception: pass
-            msg = ("Доступ только для участников закрытого канала.\n"
-                   "Вступите в канал и вернитесь к боту.")
-            if CHANNEL_INVITE_LINK: msg += f"\n\nСсылка: {CHANNEL_INVITE_LINK}"
-            bot.send_message(chat_id, msg); maybe_answer_callback(update); return
-
         rec = users.get(str(uid), {})
+
+        # 1) требуем подтверждение номера (контактом) если включено
+        if REQUIRE_PHONE:
+            if not rec.get("phone_ok"):
+                kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+                kb.add(types.KeyboardButton("Подтвердить номер 📱", request_contact=True))
+                bot.send_message(
+                    chat_id,
+                    "Доступ только для номеров из списка.\n"
+                    "Нажмите «Подтвердить номер 📱», чтобы отправить свой номер из Telegram.",
+                    reply_markup=kb
+                )
+                maybe_answer_callback(update)
+                return
+
+        # 2) если включено — проходим OTP через WebApp
         if REQUIRE_CODE and not rec.get("verified", False):
             kb = types.InlineKeyboardMarkup()
             if WEBAPP_URL:
@@ -225,14 +279,18 @@ def require_access(handler):
                     "Открыть форму подтверждения",
                     web_app=types.WebAppInfo(url=WEBAPP_URL)
                 ))
-                bot.send_message(
-                    chat_id,
-                    "🔒 Требуется подтверждение доступа. Откройте форму и завершите подтверждение.",
-                    reply_markup=kb
-                )
             else:
                 bot.send_message(chat_id, "WEBAPP_URL не настроен. Обратитесь к администратору.")
-            maybe_answer_callback(update); return
+                maybe_answer_callback(update)
+                return
+
+            bot.send_message(
+                chat_id,
+                "🔒 Требуется подтверждение входа. Откройте форму и завершите подтверждение.",
+                reply_markup=kb
+            )
+            maybe_answer_callback(update)
+            return
 
         return handler(update, *args, **kwargs)
     return wrapper
@@ -288,11 +346,9 @@ btnIssue.addEventListener('click', async ()=>{
     const r = await fetch('/api/otp/issue', {method:'POST', headers:{'X-Init-Data': initData}});
     const j = await r.json();
     if(!j.ok){ err.textContent = j.error || 'Не удалось получить код'; return; }
-    // Подставим код в скрытое поле и визуальные коробочки:
     hid.value = (j.code || '').toString().slice(0,6);
     render();
-    err.textContent = 'Код сгенерирован. Проверьте поля и нажмите Подтвердить. Срок: ' + j.ttl_min + ' мин.';
-    btnSend.disabled = hid.value.length !== 6;
+    err.textContent = 'Код сгенерирован. Нажмите «Подтвердить». Срок: ' + j.ttl_min + ' мин.';
     hid.focus();
   }catch(e){ err.textContent = 'Сеть недоступна'; }
 });
@@ -321,9 +377,11 @@ def _verify_webapp_init_data(init_data: str):
         data_check = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
         secret = hashlib.sha256(TOKEN.encode()).digest()
         calc_hash = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
-        if calc_hash != recv_hash: return None
+        if calc_hash != recv_hash:
+            return None
         user_json = data.get('user')
-        if not user_json: return None
+        if not user_json:
+            return None
         user = json.loads(user_json)
         return {"user_id": int(user["id"])}
     except Exception as e:
@@ -338,13 +396,35 @@ def webapp_page():
 def api_issue():
     init_data = request.headers.get('X-Init-Data', '')
     info = _verify_webapp_init_data(init_data)
-    if not info: return jsonify(ok=False, error="bad signature"), 403
+    if not info:
+        return jsonify(ok=False, error="bad signature"), 403
     uid = info["user_id"]
-    if CHANNEL_ID and not is_member_of_channel(uid):
-        return jsonify(ok=False, error="join the channel first"), 403
+    # серверная проверка номера, если включено
+    if REQUIRE_PHONE:
+        ensure_user_record(uid)
+        if not users[str(uid)].get("phone_ok"):
+            return jsonify(ok=False, error="phone not approved"), 403
     code = issue_otp(uid)
     return jsonify(ok=True, code=code, ttl=OTP_TTL_SECS, ttl_min=max(1, OTP_TTL_SECS//60))
-    
+
+@app.post("/api/otp/verify")
+def api_verify():
+    init_data = request.headers.get('X-Init-Data', '')
+    info = _verify_webapp_init_data(init_data)
+    if not info:
+        return jsonify(ok=False, error="bad signature"), 403
+    uid = info["user_id"]
+    payload = request.get_json(silent=True) or {}
+    code = str(payload.get('code','')).strip()
+    ok, msg = check_otp(uid, code)
+    if not ok:
+        return jsonify(ok=False, error=msg)
+    ensure_user_record(uid)
+    users[str(uid)]["verified"] = True
+    _save_users()
+    return jsonify(ok=True)
+
+# ───────── webhook endpoint (если включён USE_WEBHOOK) ─────────
 WEBHOOK_PATH = f"/tg/{TOKEN}"
 
 @app.post(WEBHOOK_PATH)
@@ -356,36 +436,66 @@ def telegram_webhook():
         return 'ok', 200
     return 'bad', 400
 
-
-@app.post("/api/otp/verify")
-def api_verify():
-    init_data = request.headers.get('X-Init-Data', '')
-    info = _verify_webapp_init_data(init_data)
-    if not info: return jsonify(ok=False, error="bad signature"), 403
-    uid = info["user_id"]
-    payload = request.get_json(silent=True) or {}
-    code = str(payload.get('code','')).strip()
-    ok, msg = check_otp(uid, code)
-    if not ok: return jsonify(ok=False, error=msg)
-    ensure_user_record(uid)
-    users[str(uid)]["verified"] = True; save_users()
-    return jsonify(ok=True)
-
-def _run_web():
-    port = int(os.getenv("PORT", "8080"))
-    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
-
 # ─────────────────────────── ХЭНДЛЕРЫ ────────────────────────
+@bot.message_handler(content_types=["contact"])
+def handle_contact(message):
+    uid = message.from_user.id
+    ensure_user_record(uid)
+
+    if not message.contact or message.contact.user_id != uid:
+        bot.reply_to(message, "Отправьте свой номер через кнопку «Подтвердить номер 📱».")
+        return
+
+    phone = normalize_phone(message.contact.phone_number)
+    if not phone:
+        bot.reply_to(message, "Не удалось распознать номер. Попробуйте ещё раз.")
+        return
+
+    users[str(uid)]["phone"] = phone
+    users[str(uid)]["phone_ok"] = (phone in ALLOWED_SET)
+    _save_users()
+
+    bot.send_message(message.chat.id, f"Номер получен: {phone}", reply_markup=types.ReplyKeyboardRemove())
+
+    if not users[str(uid)]["phone_ok"]:
+        bot.send_message(message.chat.id, "❌ Ваш номер не в списке доступа. Обратитесь к администратору.")
+        return
+
+    # если нужен OTP — предложим форму, иначе пустим дальше
+    if REQUIRE_CODE and not users[str(uid)].get("verified"):
+        kb = types.InlineKeyboardMarkup()
+        if WEBAPP_URL:
+            kb.add(types.InlineKeyboardButton(
+                "Открыть форму подтверждения",
+                web_app=types.WebAppInfo(url=WEBAPP_URL)
+            ))
+        bot.send_message(message.chat.id, "✅ Номер подтверждён. Осталось подтвердить вход:", reply_markup=kb)
+    else:
+        bot.send_message(message.chat.id, "✅ Доступ разрешён. Открываю меню…")
+        try:
+            start(message)
+        except Exception:
+            pass
+
+@bot.message_handler(commands=["reload_phones"])
+def reload_phones_cmd(m):
+    if m.from_user.id not in ADMIN_IDS:
+        return
+    global ALLOWED_SET
+    ALLOWED_SET = load_allowed_phones()
+    bot.reply_to(m, f"Список телефонов обновлён. Всего: {len(ALLOWED_SET)}")
+
 @bot.message_handler(commands=['stats', 'count'])
 def send_stats(message):
     total = len(users)
     verified = sum(1 for v in users.values() if isinstance(v, dict) and v.get("verified"))
-    bot.send_message(message.chat.id, f"Всего пользователей: {total}\nПодтверждены: {verified}")
+    bot.send_message(message.chat.id, f"Всего пользователей: {total}\nПодтверждены (OTP): {verified}")
 
 @bot.message_handler(commands=['menu'])
 @require_access
 def show_menu(message):
-    uid = message.from_user.id; ensure_user_record(uid)
+    uid = message.from_user.id
+    ensure_user_record(uid)
     rec = users.get(str(uid), {})
     lang = user_data.get(uid, {}).get("lang", "ru")
     name = rec.get("name", "User")
@@ -394,7 +504,9 @@ def show_menu(message):
 @bot.message_handler(commands=['start'])
 @require_access
 def start(message):
-    user_id = message.from_user.id; ensure_user_record(user_id)
+    user_id = message.from_user.id
+    ensure_user_record(user_id)
+
     rec = users.get(str(user_id), {})
     if not rec.get("name"):
         lang_markup = types.InlineKeyboardMarkup(row_width=3)
@@ -405,9 +517,15 @@ def start(message):
         )
         intro_video_id = VIDEO_FILE_IDS.get("intro")
         if intro_video_id:
-            try: bot.send_video(message.chat.id, intro_video_id)
-            except Exception as e: logging.error(f"Не удалось отправить видео приветствия: {e}")
-        sent = bot.send_message(message.chat.id, "Выберите язык / Select language / Dil seçin:", reply_markup=lang_markup)
+            try:
+                bot.send_video(message.chat.id, intro_video_id)
+            except Exception as e:
+                logging.error(f"Не удалось отправить видео приветствия: {e}")
+        sent = bot.send_message(
+            message.chat.id,
+            "Выберите язык / Select language / Dil seçin:",
+            reply_markup=lang_markup
+        )
         user_data[user_id] = {"lang_msg": sent.message_id, "state": "awaiting_language"}
     else:
         lang = user_data.get(user_id, {}).get("lang", "ru")
@@ -420,26 +538,37 @@ def ask_name(call):
     user_id = call.from_user.id
     lang = call.data.split("_")[1]
     user_data[user_id] = {"lang": lang, "state": "awaiting_name"}
-    try: bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception: pass
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
     sent = bot.send_message(call.message.chat.id, texts[lang]["welcome"])
     user_data[user_id]["name_msg"] = sent.message_id
-    try: bot.answer_callback_query(call.id)
-    except Exception: pass
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
 @bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "awaiting_name")
 @require_access
 def get_name(message):
-    user_id = message.from_user.id; ensure_user_record(user_id)
+    user_id = message.from_user.id
+    ensure_user_record(user_id)
     name = (message.text or "").strip()
-    users[str(user_id)]["name"] = name; save_users()
+
+    users[str(user_id)]["name"] = name
+    _save_users()
     user_data[user_id]["name"] = name
+
     lang = user_data[user_id].get("lang", "ru")
     try:
         nm = user_data[user_id].get("name_msg", 0)
-        if nm: bot.delete_message(message.chat.id, nm)
+        if nm:
+            bot.delete_message(message.chat.id, nm)
         bot.delete_message(message.chat.id, message.message_id)
-    except Exception: pass
+    except Exception:
+        pass
+
     user_data[user_id]["state"] = "main"
     send_main_menu(user_id, lang, name)
 
@@ -447,6 +576,7 @@ def send_main_menu(user_id: int, lang: str = None, name: str = None):
     rec = users.get(str(user_id), {})
     lang = (lang or user_data.get(user_id, {}).get("lang") or "ru")
     name = (name or user_data.get(user_id, {}).get("name") or rec.get("name", "User"))
+
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(texts[lang]["materials"], callback_data="materials"),
@@ -455,22 +585,31 @@ def send_main_menu(user_id: int, lang: str = None, name: str = None):
         types.InlineKeyboardButton(texts[lang]["search"], callback_data="search")
     )
     bot.send_message(user_id, texts[lang]["name_reply"].format(name=name), reply_markup=markup)
-    user_data.setdefault(user_id, {}); user_data[user_id].update({"state": "main", "lang": lang, "name": name})
+
+    user_data.setdefault(user_id, {})
+    user_data[user_id].update({"state": "main", "lang": lang, "name": name})
 
 @bot.callback_query_handler(func=lambda call: True)
 @require_access
 def callback_handler(call):
     user_id = call.from_user.id
+
     if user_id not in user_data:
-        rec = users.get(str(user_id), {}); send_main_menu(user_id, "ru", rec.get("name", "User"))
-        try: bot.answer_callback_query(call.id)
-        except Exception: pass
+        rec = users.get(str(user_id), {})
+        send_main_menu(user_id, "ru", rec.get("name", "User"))
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
         return
 
     lang = user_data[user_id].get("lang", "ru")
     name = users.get(str(user_id), {}).get("name", "User")
-    try: bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception: pass
+
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
 
     if call.data == "materials":
         markup = types.InlineKeyboardMarkup(row_width=1)
@@ -495,13 +634,23 @@ def callback_handler(call):
         back_to = "materials" if file_key in file_paths else "videoguides"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(texts[lang]["back"], callback_data=back_to))
+
         file_id = VIDEO_FILE_IDS.get(file_key)
         if file_id:
-            bot.send_video(call.message.chat.id, file_id, caption=texts[lang]["file_titles"].get(file_key, file_key), reply_markup=markup)
+            bot.send_video(
+                call.message.chat.id,
+                file_id,
+                caption=texts[lang]["file_titles"].get(file_key, file_key),
+                reply_markup=markup
+            )
         else:
             path = file_paths.get(file_key)
             if path and path.startswith("http"):
-                bot.send_message(call.message.chat.id, f"{texts[lang]['file_titles'].get(file_key, file_key)}:\n{path}", reply_markup=markup)
+                bot.send_message(
+                    call.message.chat.id,
+                    f"{texts[lang]['file_titles'].get(file_key, file_key)}:\n{path}",
+                    reply_markup=markup
+                )
             else:
                 bot.send_message(call.message.chat.id, "Файл не найден.", reply_markup=markup)
 
@@ -521,16 +670,20 @@ def callback_handler(call):
         user_data[user_id]["state"] = "contact"
 
     elif call.data == "search":
-        try: bot.answer_callback_query(call.id)
-        except Exception: pass
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
         bot.send_message(call.message.chat.id, texts[lang]["search"] + ": Введите ключевое слово для поиска.")
         user_data[user_id]["state"] = "search"
 
     elif call.data == "main_menu":
         send_main_menu(user_id, lang, name)
 
-    try: bot.answer_callback_query(call.id)
-    except Exception: pass
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
 @bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "search")
 @require_access
@@ -538,11 +691,13 @@ def handle_search(message):
     user_id = message.from_user.id
     lang = user_data[user_id].get("lang", "ru")
     query = (message.text or "").lower()
+
     results = []
     for key, keywords in search_keywords.items():
         if any(word in query for word in keywords):
             title = texts[lang]["file_titles"].get(key, key)
             results.append((key, title))
+
     if results:
         markup = types.InlineKeyboardMarkup()
         for key, title in results:
@@ -551,28 +706,30 @@ def handle_search(message):
         bot.send_message(message.chat.id, f"Результаты поиска по запросу: «{message.text}»", reply_markup=markup)
     else:
         bot.send_message(message.chat.id, f"По запросу «{message.text}» ничего не найдено. Попробуйте другое ключевое слово.")
+
     user_data[user_id]["state"] = "search"
 
 # ─────────────────────────── ЗАПУСК ─────────────────────────
 if __name__ == "__main__":
     try:
-        bot.remove_webhook()  # на всякий
+        # чистим старый вебхук на всякий
+        bot.remove_webhook()
+
         if USE_WEBHOOK:
             if not PUBLIC_URL:
-                raise SystemExit("PUBLIC_URL не задан. Укажи https://<твой-домен>.railway.app")
-            # регистрируем вебхук (и очищаем возможные накопившиеся апдейты)
-            bot.set_webhook(url=PUBLIC_URL + WEBHOOK_PATH, drop_pending_updates=True)
-            # запускаем ЕДИНСТВЕННЫЙ процесс — Flask (и webapp, и webhook)
-            app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")), threaded=True)
+                raise SystemExit("PUBLIC_URL не задан. Укажи https://<твой-домен>.up.railway.app")
+            # регистрируем вебхук (и чистим накопившиеся апдейты)
+            bot.set_webhook(url=PUBLIC_URL + f"/tg/{TOKEN}", drop_pending_updates=True)
+            # запускаем Flask (и /webapp, и вебхук)
+            app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")), threaded=True, use_reloader=False)
         else:
-            # режим polling (на случай локальной отладки)
-            import threading
-            threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT","8080")), threaded=True),
-                             daemon=True).start()
+            # локальная отладка — параллельно поднимем Flask и polling
+            threading.Thread(
+                target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT","8080")), threaded=True, use_reloader=False),
+                daemon=True
+            ).start()
             bot.infinity_polling(skip_pending=True, timeout=60)
+
     except ApiTelegramException as e:
         print(f"❌ Telegram error: {e}")
         raise
-
-
-
