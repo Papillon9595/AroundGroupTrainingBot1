@@ -48,7 +48,7 @@ def ensure_user_record(user_id: int):
         users[uid] = {"name": "", "verified": False}
         save_users()
 
-load_dotenv()
+load_dotenv(override=True)
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
@@ -545,6 +545,7 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
 
 
