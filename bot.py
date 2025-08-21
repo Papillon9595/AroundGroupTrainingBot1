@@ -285,8 +285,12 @@ btnIssue.addEventListener('click', async ()=>{
     const r = await fetch('/api/otp/issue', {method:'POST', headers:{'X-Init-Data': initData}});
     const j = await r.json();
     if(!j.ok){ err.textContent = j.error || 'Не удалось получить код'; return; }
-    hid.value = j.code; render();
-    err.textContent = 'Код сгенерирован. Срок: ' + j.ttl_min + ' мин.';
+    // Подставим код в скрытое поле и визуальные коробочки:
+    hid.value = (j.code || '').toString().slice(0,6);
+    render();
+    err.textContent = 'Код сгенерирован. Проверьте поля и нажмите Подтвердить. Срок: ' + j.ttl_min + ' мин.';
+    btnSend.disabled = hid.value.length !== 6;
+    hid.focus();
   }catch(e){ err.textContent = 'Сеть недоступна'; }
 });
 
@@ -546,3 +550,4 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     bot.infinity_polling(skip_pending=True, timeout=60)
+
