@@ -60,12 +60,12 @@ def _parse_int_set(env_name: str):
         return set()
     return set(int(x) for x in raw.replace(" ", "").split(",") if x)
 
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))           # -100xxxxxxxxxx
-CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "")# ссылка-приглашение (опционально)
-ADMIN_IDS = _parse_int_set("ADMIN_IDS")                  # 123,456
-REQUIRE_CODE = os.getenv("REQUIRE_CODE", "0") == "1"     # "1" чтобы требовать код
-ACCESS_CODE = os.getenv("ACCESS_CODE", "").strip()       # сам код
-ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"     # "1" если бот должен работать в группах
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))           
+CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "")
+ADMIN_IDS = _parse_int_set("ADMIN_IDS")                  
+REQUIRE_CODE = os.getenv("REQUIRE_CODE", "0") == "1"     
+ACCESS_CODE = os.getenv("ACCESS_CODE", "").strip()       
+ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"     
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 
@@ -545,5 +545,6 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
 
