@@ -171,7 +171,6 @@ search_keywords = {
     "accessories": ["accessories", "аксессуары"],
 }
 
-# ---------------------------- УТИЛЫ ----------------------------
 def get_safe_lang(uid: int) -> str:
     return user_data.get(uid, {}).get("lang", "ru")
 
@@ -248,7 +247,6 @@ def require_access(handler):
         return handler(update, *args, **kwargs)
     return wrapper
 
-# ---------------------------- КОМАНДЫ /СТАТИСТИКА ----------------------------
 @bot.message_handler(commands=['stats', 'count'])
 def send_stats(message):
     total = len(users)
@@ -269,7 +267,6 @@ def set_code(message):
     else:
         bot.reply_to(message, "Использование: /setcode NEW_CODE")
 
-# ---------------------------- ОНБОРДИНГ И МЕНЮ ----------------------------
 @bot.message_handler(commands=['menu'])
 @require_access
 def show_menu(message):
@@ -366,7 +363,6 @@ def send_main_menu(user_id: int, lang: str, name: str):
     bot.send_message(user_id, texts[lang]["name_reply"].format(name=name), reply_markup=markup)
     user_data[user_id]["state"] = "main"
 
-# ---------------------------- КНОПКИ ----------------------------
 @bot.callback_query_handler(func=lambda call: True)
 @require_access
 def callback_handler(call):
@@ -448,7 +444,6 @@ def callback_handler(call):
     except Exception:
         pass
 
-# ---------------------------- ПОИСК ----------------------------
 @bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "search")
 @require_access
 def handle_search(message):
@@ -473,7 +468,6 @@ def handle_search(message):
 
     user_data[user_id]["state"] = "search"
 
-# ---------------------------- ВЕРИФИКАЦИЯ ПО КОДУ ----------------------------
 @bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "awaiting_code")
 def verify_code(message):
     uid = message.from_user.id
@@ -489,7 +483,6 @@ def verify_code(message):
     else:
         bot.reply_to(message, "❌ Неверный код. Попробуйте ещё раз.")
 
-# ---------------------------- ГРУППЫ / АДМИН-КОМАНДЫ ----------------------------
 @bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"])
 def handle_group_messages(message):
     if not ALLOW_GROUPS:
@@ -528,7 +521,6 @@ def admin_only_command(message):
         bot.reply_to(message, "⚠️ Произошла ошибка при проверке прав.")
         logging.error(f"Ошибка в команде /обучение: {e}")
 
-# ---------------------------- ЛОВИМ МЕДИА ----------------------------
 @bot.message_handler(content_types=['video', 'animation', 'document'])
 def handle_media_messages(message):
     if message.video:
@@ -546,7 +538,6 @@ def handle_media_messages(message):
     else:
         bot.send_message(message.chat.id, "❗ Пришлите видео, GIF или mp4-документ.")
 
-# ---------------------------- ЗАПУСК ----------------------------
 if __name__ == "__main__":
     while True:
         try:
@@ -554,4 +545,5 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
