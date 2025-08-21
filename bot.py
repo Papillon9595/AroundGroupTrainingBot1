@@ -73,6 +73,9 @@ WEBAPP_URL = (os.getenv("WEBAPP_URL") or "").strip()
 OTP_TTL_SECS = int(os.getenv("OTP_TTL_SECS", "600"))
 OTP_LENGTH = int(os.getenv("OTP_LENGTH", "6"))
 OTP_ATTEMPTS = int(os.getenv("OTP_ATTEMPTS", "3"))
+USE_WEBHOOK = os.getenv("USE_WEBHOOK", "0") == "1"
+PUBLIC_URL = (os.getenv("PUBLIC_URL") or "").rstrip("/")
+WEBAPP_URL = (os.getenv("WEBAPP_URL") or "").strip()
 
 # ─────────────────────── ИНИЦИАЛИЗАЦИЯ БОТА ─────────────────
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
@@ -341,6 +344,18 @@ def api_issue():
         return jsonify(ok=False, error="join the channel first"), 403
     code = issue_otp(uid)
     return jsonify(ok=True, code=code, ttl=OTP_TTL_SECS, ttl_min=max(1, OTP_TTL_SECS//60))
+    
+WEBHOOK_PATH = f"/tg/{TOKEN}"
+
+@app.post(WEBHOOK_PATH)
+def telegram_webhook():
+    if request.headers.get('content-type') == 'application/json':
+        js = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(js)
+        bot.process_new_updates([update])
+        return 'ok', 200
+    return 'bad', 400
+
 
 @app.post("/api/otp/verify")
 def api_verify():
@@ -541,13 +556,23 @@ def handle_search(message):
 # ─────────────────────────── ЗАПУСК ─────────────────────────
 if __name__ == "__main__":
     try:
-        # Запускаем WebApp (Flask) рядом с ботом
-        threading.Thread(target=_run_web, daemon=True).start()
-        bot.remove_webhook()
-        bot.get_me()   # валидация токена
-    except Exception as e:
-        print(f"❌ Startup error: {e}")
-        raise SystemExit(1)
+        bot.remove_webhook()  # на всякий
+        if USE_WEBHOOK:
+            if not PUBLIC_URL:
+                raise SystemExit("PUBLIC_URL не задан. Укажи https://<твой-домен>.railway.app")
+            # регистрируем вебхук (и очищаем возможные накопившиеся апдейты)
+            bot.set_webhook(url=PUBLIC_URL + WEBHOOK_PATH, drop_pending_updates=True)
+            # запускаем ЕДИНСТВЕННЫЙ процесс — Flask (и webapp, и webhook)
+            app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")), threaded=True)
+        else:
+            # режим polling (на случай локальной отладки)
+            import threading
+            threading.Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.getenv("PORT","8080")), threaded=True),
+                             daemon=True).start()
+            bot.infinity_polling(skip_pending=True, timeout=60)
+    except ApiTelegramException as e:
+        print(f"❌ Telegram error: {e}")
+        raise
 
-    bot.infinity_polling(skip_pending=True, timeout=60)
+
 
