@@ -70,6 +70,25 @@ ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 
 # ... импортов и загрузки users.json ...
+from dotenv import load_dotenv
+import os, re, sys
+
+load_dotenv(override=True)  # обязательно override=True
+
+raw_token = os.getenv("BOT_TOKEN")
+print("[ENV] BOT_TOKEN raw:", repr(raw_token))  # ← покажет, что реально приходит из окружения
+
+TOKEN = ""
+if raw_token is not None:
+    # уберём кавычки, пробелы, невидимые символы
+    TOKEN = re.sub(r'[^A-Za-z0-9:_-]', '', raw_token).strip().strip('"').strip("'")
+
+print(f"[ENV] BOT_TOKEN cleaned length={len(TOKEN)} head={TOKEN[:8]}... tail=...{TOKEN[-6:]}")
+
+# Если токен «кривой» — выйдем сразу, чтобы увидеть логи и не циклить перезапуски
+if not TOKEN or ":" not in TOKEN or len(TOKEN) < 30:
+    print("❌ BOT_TOKEN пуст/в неверном формате. Проверь переменную окружения на хостинге.")
+    sys.exit(1)
 
 # ---------------------------- ОКРУЖЕНИЕ ----------------------------
 from dotenv import load_dotenv
@@ -610,6 +629,7 @@ if __name__ == "__main__":
         print(f"❌ Startup error: {e}")
         raise SystemExit(1)
     bot.infinity_polling(skip_pending=True, timeout=60)
+
 
 
 
