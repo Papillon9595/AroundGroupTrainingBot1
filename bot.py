@@ -83,6 +83,13 @@ bot = telebot.TeleBot(TOKEN, parse_mode=None)
 def whoami(m):
     bot.reply_to(m, f"Ваш user_id: {m.from_user.id}")
 
+@bot.message_handler(func=lambda m: m.forward_from_chat is not None and m.from_user.id in ADMIN_IDS)
+def show_forwarded_chat_id(m):
+    cid = m.forward_from_chat.id
+    ctype = m.forward_from_chat.type
+    title = m.forward_from_chat.title
+    bot.reply_to(m, f"Forwarded from: {title!r}\nchat_type={ctype}\nchat_id={cid}")
+    
 @bot.message_handler(commands=['env'])
 def env_cmd(m):
     try:
@@ -601,6 +608,7 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
 
 
