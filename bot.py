@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import os
-import time
 import json
 import logging
 from functools import wraps
@@ -11,8 +10,10 @@ from telebot.types import CallbackQuery as TGCallbackQuery
 from telebot.apihelper import ApiTelegramException
 from dotenv import load_dotenv
 
+# ---------------------------- ЛОГИ ----------------------------
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 
+# ---------------------------- ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ ----------------------------
 users: dict = {}
 users_file = "users.json"
 
@@ -48,9 +49,10 @@ def ensure_user_record(user_id: int):
         users[uid] = {"name": "", "verified": False}
         save_users()
 
+# ---------------------------- ОКРУЖЕНИЕ ----------------------------
 load_dotenv(override=True)
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
@@ -60,97 +62,16 @@ def _parse_int_set(env_name: str):
         return set()
     return set(int(x) for x in raw.replace(" ", "").split(",") if x)
 
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))           
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))           # -100xxxxxxxxxxxx
 CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "")
-ADMIN_IDS = _parse_int_set("ADMIN_IDS")                  
-REQUIRE_CODE = os.getenv("REQUIRE_CODE", "0") == "1"     
-ACCESS_CODE = os.getenv("ACCESS_CODE", "").strip()       
-ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"     
+ADMIN_IDS = _parse_int_set("ADMIN_IDS")                  # 111,222
+REQUIRE_CODE = os.getenv("REQUIRE_CODE", "0") == "1"     # "1" -> True
+ACCESS_CODE = (os.getenv("ACCESS_CODE") or "").strip()
+ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"     # "1" -> True
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
-
-# ... импортов и загрузки users.json ...
-from dotenv import load_dotenv
-import os, re, sys
-
-load_dotenv(override=True)  # обязательно override=True
-
-raw_token = os.getenv("BOT_TOKEN")
-print("[ENV] BOT_TOKEN raw:", repr(raw_token))  # ← покажет, что реально приходит из окружения
-
-TOKEN = ""
-if raw_token is not None:
-    # уберём кавычки, пробелы, невидимые символы
-    TOKEN = re.sub(r'[^A-Za-z0-9:_-]', '', raw_token).strip().strip('"').strip("'")
-
-print(f"[ENV] BOT_TOKEN cleaned length={len(TOKEN)} head={TOKEN[:8]}... tail=...{TOKEN[-6:]}")
-
-# Если токен «кривой» — выйдем сразу, чтобы увидеть логи и не циклить перезапуски
-if not TOKEN or ":" not in TOKEN or len(TOKEN) < 30:
-    print("❌ BOT_TOKEN пуст/в неверном формате. Проверь переменную окружения на хостинге.")
-    sys.exit(1)
-
-# ---------------------------- ОКРУЖЕНИЕ ----------------------------
-from dotenv import load_dotenv
-load_dotenv(override=True)           # ← замени на override=True
-TOKEN = os.getenv("BOT_TOKEN")
-...
-bot = telebot.TeleBot(TOKEN, parse_mode=None)
-
-# ==== ВРЕМЕННЫЕ ДИАГНОСТИЧЕСКИЕ КОМАНДЫ ====
-@bot.message_handler(commands=['whoami'])
-def whoami(m):
-    bot.reply_to(m, f"Ваш user_id: {m.from_user.id}")
-
-@bot.message_handler(func=lambda m: m.forward_from_chat is not None and m.from_user.id in ADMIN_IDS)
-def show_forwarded_chat_id(m):
-    cid = m.forward_from_chat.id
-    ctype = m.forward_from_chat.type
-    title = m.forward_from_chat.title
-    bot.reply_to(m, f"Forwarded from: {title!r}\nchat_type={ctype}\nchat_id={cid}")
-    
-@bot.message_handler(commands=['env'])
-def env_cmd(m):
-    try:
-        bme = bot.get_me()
-        txt = (
-            "🔎 ENV:\n"
-            f"CHANNEL_ID = {CHANNEL_ID}\n"
-            f"ADMIN_IDS  = {sorted(list(ADMIN_IDS))}\n"
-            f"REQUIRE_CODE = {REQUIRE_CODE}\n"
-            f"ALLOW_GROUPS = {ALLOW_GROUPS}\n"
-            f"BOT (me).id  = {bme.id}\n"
-        )
-        bot.reply_to(m, txt)
-    except Exception as e:
-        bot.reply_to(m, f"Ошибка /env: {e}")
-
-@bot.message_handler(commands=['check_access'])
-def check_access(m):
-    uid = m.from_user.id
-    lines = [f"Проверка доступа для user_id={uid} и бота:"]
-    try:
-        member_me = bot.get_chat_member(CHANNEL_ID, uid)
-        lines.append(f"Вы в канале? status={member_me.status!r}")
-    except Exception as e:
-        lines.append(f"Проверка ВАС: ошибка get_chat_member: {e}")
-
-    try:
-        me = bot.get_me()
-        member_bot = bot.get_chat_member(CHANNEL_ID, me.id)
-        lines.append(f"Бот в канале? status={member_bot.status!r}")
-    except Exception as e:
-        lines.append(f"Проверка БОТА: ошибка get_chat_member: {e}\n"
-                     f"👉 Вероятно, бот НЕ админ канала.")
-
-    bot.reply_to(m, "\n".join(lines))
-# ==== КОНЕЦ ДИАГНОСТИКИ ====
 
 # ---------------------------- ДАННЫЕ КОНТЕНТА ----------------------------
-file_paths = {
-    ...
-}
-
 file_paths = {
     "product": "https://clck.ru/3NB2zY",
     "sales": "https://clck.ru/3NB2wX",
@@ -212,7 +133,7 @@ texts = {
             "sticks": "Sobranie Stikləri",
             "accessories": "Aksessuarlar"
         },
-        "video_choice": "Video dərс seçin:"
+        "video_choice": "Video dərs seçin:"
     },
     "en": {
         "welcome": "Hello, I am the Ploom company Bot, and I will help You with your training. How can I address You?",
@@ -253,9 +174,7 @@ search_keywords = {
     "accessories": ["accessories", "аксессуары"],
 }
 
-def get_safe_lang(uid: int) -> str:
-    return user_data.get(uid, {}).get("lang", "ru")
-
+# ---------------------------- УТИЛЫ ----------------------------
 def is_member_of_channel(user_id: int) -> bool:
     """Проверка, состоит ли пользователь в закрытом канале."""
     if not CHANNEL_ID:
@@ -280,17 +199,18 @@ def maybe_answer_callback(update):
         pass
 
 def require_access(handler):
-    """Декоратор: пускаем только участников канала; при необходимости — просим код."""
+    """Декоратор: доступ только для участников канала; при необходимости — запрос кода."""
     @wraps(handler)
     def wrapper(update, *args, **kwargs):
         # Определение контекста
         if isinstance(update, TGCallbackQuery):
             uid = update.from_user.id
             chat_id = update.message.chat.id
+            chat_type = getattr(update.message.chat, "type", "private")
         else:
-            # Message
             uid = update.from_user.id
             chat_id = update.chat.id
+            chat_type = getattr(update.chat, "type", "private")
 
         ensure_user_record(uid)
 
@@ -298,13 +218,9 @@ def require_access(handler):
         if uid in ADMIN_IDS:
             return handler(update, *args, **kwargs)
 
-        # Блок групп при необходимости
-        try:
-            chat_type = update.chat.type if hasattr(update, "chat") else update.message.chat.type
-        except Exception:
-            chat_type = "private"
+        # Блокируем группы при необходимости
         if not ALLOW_GROUPS and chat_type in ("group", "supergroup"):
-            return  # игнорим
+            return
 
         # 1) Проверка членства
         if not is_member_of_channel(uid):
@@ -329,6 +245,7 @@ def require_access(handler):
         return handler(update, *args, **kwargs)
     return wrapper
 
+# ---------------------------- КОМАНДЫ ----------------------------
 @bot.message_handler(commands=['stats', 'count'])
 def send_stats(message):
     total = len(users)
@@ -345,7 +262,7 @@ def set_code(message):
     if len(parts) == 2:
         global ACCESS_CODE
         ACCESS_CODE = parts[1].strip()
-        bot.reply_to(message, f"Код обновлён: {ACCESS_CODE}")
+        bot.reply_to(message, "Код обновлён.")
     else:
         bot.reply_to(message, "Использование: /setcode NEW_CODE")
 
@@ -367,7 +284,6 @@ def start(message):
     user_id = message.from_user.id
     ensure_user_record(user_id)
 
-    # Новичок — предлагаем выбор языка и приветственное видео
     rec = users.get(str(user_id), {})
     if not rec.get("name"):
         lang_markup = types.InlineKeyboardMarkup(row_width=3)
@@ -386,7 +302,6 @@ def start(message):
         sent = bot.send_message(message.chat.id, "Выберите язык / Select language / Dil seçin:", reply_markup=lang_markup)
         user_data[user_id] = {"lang_msg": sent.message_id, "state": "awaiting_language"}
     else:
-        # Повторный старт — сразу меню
         lang = user_data.get(user_id, {}).get("lang", "ru")
         name = rec.get("name", "User")
         send_main_menu(user_id, lang, name)
@@ -405,8 +320,8 @@ def ask_name(call):
     user_data[user_id]["name_msg"] = sent.message_id
     try:
         bot.answer_callback_query(call.id)
-    except Exception as e:
-        logging.error(f"answer_callback_query error: {e}")
+    except Exception:
+        pass
 
 @bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "awaiting_name")
 @require_access
@@ -415,13 +330,11 @@ def get_name(message):
     ensure_user_record(user_id)
     name = (message.text or "").strip()
 
-    # Сохраняем в users и user_data
     users[str(user_id)]["name"] = name
     save_users()
     user_data[user_id]["name"] = name
 
     lang = user_data[user_id].get("lang", "ru")
-    logging.info(f"User {user_id} named '{name}' started using the bot.")
 
     try:
         nm = user_data[user_id].get("name_msg", 0)
@@ -456,7 +369,6 @@ def callback_handler(call):
 
     lang = user_data[user_id].get("lang", "ru")
     name = users.get(str(user_id), {}).get("name", "User")
-    # state = user_data[user_id].get("state", "main")
 
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -466,7 +378,7 @@ def callback_handler(call):
     if call.data == "materials":
         markup = types.InlineKeyboardMarkup(row_width=1)
         for key, title in texts[lang]["file_titles"].items():
-            if key not in VIDEO_FILE_IDS:  # файлы, не видео
+            if key not in VIDEO_FILE_IDS:
                 markup.add(types.InlineKeyboardButton(title, callback_data=f"file_{key}"))
         markup.add(types.InlineKeyboardButton(texts[lang]["back"], callback_data="main_menu"))
         bot.send_message(call.message.chat.id, texts[lang]["choose_file"], reply_markup=markup)
@@ -520,12 +432,12 @@ def callback_handler(call):
     elif call.data == "main_menu":
         send_main_menu(user_id, lang, name)
 
-    # финальный ответ на коллбек
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
 
+# ---------------------------- ПОИСК ----------------------------
 @bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "search")
 @require_access
 def handle_search(message):
@@ -550,6 +462,7 @@ def handle_search(message):
 
     user_data[user_id]["state"] = "search"
 
+# ---------------------------- ВЕРИФИКАЦИЯ КОДА ----------------------------
 @bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "awaiting_code")
 def verify_code(message):
     uid = message.from_user.id
@@ -560,11 +473,11 @@ def verify_code(message):
         save_users()
         user_data[uid]["state"] = "main"
         bot.reply_to(message, "✅ Доступ подтверждён.")
-        # после успешной верификации — запускаем стандартный старт
         return start(message)
     else:
         bot.reply_to(message, "❌ Неверный код. Попробуйте ещё раз.")
 
+# ---------------------------- ГРУППЫ ----------------------------
 @bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"])
 def handle_group_messages(message):
     if not ALLOW_GROUPS:
@@ -577,7 +490,6 @@ def handle_group_messages(message):
 
 @bot.message_handler(content_types=['new_chat_members'])
 def greet_new_member(message):
-    # это про группы/супергруппы; в личке не потребуется
     for new_member in message.new_chat_members:
         welcome_text = (
             f"👋 Привет, {new_member.first_name}!\n"
@@ -588,7 +500,7 @@ def greet_new_member(message):
         try:
             bot.send_message(new_member.id, "👋 Приветствуем в обучающем проекте Ploom!\nЧтобы начать, напишите /start.")
         except Exception:
-            bot.send_message(message.chat.id, f"👋 {new_member.first_name}, добро пожаловать! Напиши мне в личку, чтобы получить материалы.")
+            pass
 
 @bot.message_handler(commands=['обучение'])
 def admin_only_command(message):
@@ -597,20 +509,18 @@ def admin_only_command(message):
         if chat_member.status not in ['administrator', 'creator']:
             bot.reply_to(message, "⛔ Эта команда доступна только администраторам.")
             return
-        # Логика рассылки/отправки материалов
         bot.reply_to(message, "📚 Отправляю обучающие материалы...")
     except Exception as e:
         bot.reply_to(message, "⚠️ Произошла ошибка при проверке прав.")
         logging.error(f"Ошибка в команде /обучение: {e}")
 
+# ---------------------------- МЕДИА ----------------------------
 @bot.message_handler(content_types=['video', 'animation', 'document'])
 def handle_media_messages(message):
     if message.video:
-        file_id = message.video.file_id
-        bot.send_message(message.chat.id, f"📹 Это video\n`{file_id}`", parse_mode='Markdown')
+        bot.send_message(message.chat.id, f"📹 Это video\n`{message.video.file_id}`", parse_mode='Markdown')
     elif message.animation:
-        file_id = message.animation.file_id
-        bot.send_message(message.chat.id, f"🌀 Это animation (GIF)\n`{file_id}`", parse_mode='Markdown')
+        bot.send_message(message.chat.id, f"🌀 Это animation (GIF)\n`{message.animation.file_id}`", parse_mode='Markdown')
     elif message.document:
         file = message.document
         if file.mime_type == "video/mp4":
@@ -620,23 +530,12 @@ def handle_media_messages(message):
     else:
         bot.send_message(message.chat.id, "❗ Пришлите видео, GIF или mp4-документ.")
 
+# ---------------------------- ЗАПУСК ----------------------------
 if __name__ == "__main__":
     try:
         bot.remove_webhook()
-        me = bot.get_me()
-        print(f"✅ Bot online: @{me.username} (id={me.id})")
+        bot.get_me()  # валидируем токен на старте
     except Exception as e:
         print(f"❌ Startup error: {e}")
         raise SystemExit(1)
     bot.infinity_polling(skip_pending=True, timeout=60)
-
-
-
-
-
-
-
-
-
-
-
