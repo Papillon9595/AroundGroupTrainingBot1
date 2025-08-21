@@ -11,10 +11,8 @@ from telebot.types import CallbackQuery as TGCallbackQuery
 from telebot.apihelper import ApiTelegramException
 from dotenv import load_dotenv
 
-# ---------------------------- ЛОГИ ----------------------------
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
 
-# ---------------------------- ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ ----------------------------
 users: dict = {}
 users_file = "users.json"
 
@@ -50,7 +48,6 @@ def ensure_user_record(user_id: int):
         users[uid] = {"name": "", "verified": False}
         save_users()
 
-# ---------------------------- ОКРУЖЕНИЕ ----------------------------
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -72,7 +69,6 @@ ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"     # "1" если бот �
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 
-# ---------------------------- ДАННЫЕ КОНТЕНТА ----------------------------
 file_paths = {
     "product": "https://clck.ru/3NB2zY",
     "sales": "https://clck.ru/3NB2wX",
@@ -558,3 +554,4 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
