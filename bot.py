@@ -1,31 +1,78 @@
-import time
-import telebot
+# -*- coding: utf-8 -*-
 import os
-from telebot import types
-from dotenv import load_dotenv
-import logging
+import time
 import json
+import logging
+from functools import wraps
 
-users = {}
+import telebot
+from telebot import types
+from telebot.types import CallbackQuery as TGCallbackQuery
+from telebot.apihelper import ApiTelegramException
+from dotenv import load_dotenv
+
+# ---------------------------- ЛОГИ ----------------------------
+logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
+
+# ---------------------------- ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ ----------------------------
+users: dict = {}
 users_file = "users.json"
 
 try:
     with open(users_file, "r", encoding="utf-8") as f:
         users = json.load(f)
+        # Миграция старого формата: "12345": "Имя" -> "12345": {"name": "Имя", "verified": False}
+        changed = False
+        for k, v in list(users.items()):
+            if isinstance(v, str):
+                users[k] = {"name": v, "verified": False}
+                changed = True
+            elif isinstance(v, dict):
+                if "name" not in v:
+                    users[k]["name"] = ""
+                    changed = True
+                if "verified" not in v:
+                    users[k]["verified"] = False
+                    changed = True
+        if changed:
+            with open(users_file, "w", encoding="utf-8") as wf:
+                json.dump(users, wf, ensure_ascii=False, indent=2)
 except FileNotFoundError:
     users = {}
 
+def save_users():
+    with open(users_file, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+
+def ensure_user_record(user_id: int):
+    uid = str(user_id)
+    if uid not in users:
+        users[uid] = {"name": "", "verified": False}
+        save_users()
+
+# ---------------------------- ОКРУЖЕНИЕ ----------------------------
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-bot = telebot.TeleBot(TOKEN)
+def _parse_int_set(env_name: str):
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return set()
+    return set(int(x) for x in raw.replace(" ", "").split(",") if x)
 
-logging.basicConfig(filename='bot_errors.log', level=logging.ERROR)
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))           # -100xxxxxxxxxx
+CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "")# ссылка-приглашение (опционально)
+ADMIN_IDS = _parse_int_set("ADMIN_IDS")                  # 123,456
+REQUIRE_CODE = os.getenv("REQUIRE_CODE", "0") == "1"     # "1" чтобы требовать код
+ACCESS_CODE = os.getenv("ACCESS_CODE", "").strip()       # сам код
+ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"     # "1" если бот должен работать в группах
 
+bot = telebot.TeleBot(TOKEN, parse_mode=None)
+
+# ---------------------------- ДАННЫЕ КОНТЕНТА ----------------------------
 file_paths = {
     "product": "https://clck.ru/3NB2zY",
     "sales": "https://clck.ru/3NB2wX",
@@ -87,7 +134,7 @@ texts = {
             "sticks": "Sobranie Stikləri",
             "accessories": "Aksessuarlar"
         },
-        "video_choice": "Video dərs seçin:"
+        "video_choice": "Video dərс seçin:"
     },
     "en": {
         "welcome": "Hello, I am the Ploom company Bot, and I will help You with your training. How can I address You?",
@@ -128,56 +175,149 @@ search_keywords = {
     "accessories": ["accessories", "аксессуары"],
 }
 
-@bot.message_handler(commands=['stats'])
+# ---------------------------- УТИЛЫ ----------------------------
+def get_safe_lang(uid: int) -> str:
+    return user_data.get(uid, {}).get("lang", "ru")
+
+def is_member_of_channel(user_id: int) -> bool:
+    """Проверка, состоит ли пользователь в закрытом канале."""
+    if not CHANNEL_ID:
+        logging.error("CHANNEL_ID не настроен")
+        return False
+    try:
+        member = bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except ApiTelegramException as e:
+        logging.error(f"get_chat_member error: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"membership check failed: {e}")
+        return False
+
+def maybe_answer_callback(update):
+    """Безопасно отвечаем на callback, чтобы не было 'query is too old'."""
+    try:
+        if isinstance(update, TGCallbackQuery):
+            bot.answer_callback_query(update.id)
+    except Exception:
+        pass
+
+def require_access(handler):
+    """Декоратор: пускаем только участников канала; при необходимости — просим код."""
+    @wraps(handler)
+    def wrapper(update, *args, **kwargs):
+        # Определение контекста
+        if isinstance(update, TGCallbackQuery):
+            uid = update.from_user.id
+            chat_id = update.message.chat.id
+        else:
+            # Message
+            uid = update.from_user.id
+            chat_id = update.chat.id
+
+        ensure_user_record(uid)
+
+        # Админам — всегда можно
+        if uid in ADMIN_IDS:
+            return handler(update, *args, **kwargs)
+
+        # Блок групп при необходимости
+        try:
+            chat_type = update.chat.type if hasattr(update, "chat") else update.message.chat.type
+        except Exception:
+            chat_type = "private"
+        if not ALLOW_GROUPS and chat_type in ("group", "supergroup"):
+            return  # игнорим
+
+        # 1) Проверка членства
+        if not is_member_of_channel(uid):
+            msg = ("Доступ только для участников закрытого канала.\n"
+                   "Вступите в канал и вернитесь к боту.")
+            if CHANNEL_INVITE_LINK:
+                msg += f"\n\nСсылка: {CHANNEL_INVITE_LINK}"
+            bot.send_message(chat_id, msg)
+            maybe_answer_callback(update)
+            return
+
+        # 2) Если включена проверка кодом — требуем verified
+        rec = users.get(str(uid), {})
+        if REQUIRE_CODE and not rec.get("verified", False):
+            user_data[uid] = user_data.get(uid, {})
+            user_data[uid]["state"] = "awaiting_code"
+            bot.send_message(chat_id, "🔒 Введите код доступа (из закреплённого сообщения канала):")
+            maybe_answer_callback(update)
+            return
+
+        # Пропускаем внутрь
+        return handler(update, *args, **kwargs)
+    return wrapper
+
+# ---------------------------- КОМАНДЫ /СТАТИСТИКА ----------------------------
+@bot.message_handler(commands=['stats', 'count'])
 def send_stats(message):
-    count = len(users)
-    bot.send_message(message.chat.id, f"Всего пользователей: {count}")
-    
+    total = len(users)
+    verified = sum(1 for v in users.values() if isinstance(v, dict) and v.get("verified"))
+    bot.send_message(message.chat.id, f"Всего пользователей: {total}\nПодтверждены: {verified}")
+
+@bot.message_handler(commands=['setcode'])
+def set_code(message):
+    """Админ-команда: /setcode NEW_CODE"""
+    uid = message.from_user.id
+    if uid not in ADMIN_IDS:
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) == 2:
+        global ACCESS_CODE
+        ACCESS_CODE = parts[1].strip()
+        bot.reply_to(message, f"Код обновлён: {ACCESS_CODE}")
+    else:
+        bot.reply_to(message, "Использование: /setcode NEW_CODE")
+
+# ---------------------------- ОНБОРДИНГ И МЕНЮ ----------------------------
 @bot.message_handler(commands=['menu'])
+@require_access
 def show_menu(message):
     user_id = message.from_user.id
+    ensure_user_record(user_id)
     if user_id in user_data:
         lang = user_data[user_id].get("lang", "ru")
-        name = user_data[user_id].get("name", "User")
+        name = user_data[user_id].get("name", users.get(str(user_id), {}).get("name", "User"))
         send_main_menu(user_id, lang, name)
     else:
         bot.send_message(message.chat.id, "Пожалуйста, введите /start для начала.")
+
 @bot.message_handler(commands=['start'])
+@require_access
 def start(message):
     user_id = message.from_user.id
-    if str(user_id) not in users:
-        users[str(user_id)] = ""  # Имя пока пустое, запишем позже
-        with open(users_file, "w", encoding="utf-8") as f:
-            json.dump(users, f, ensure_ascii=False, indent=2)
-    lang_markup = types.InlineKeyboardMarkup(row_width=3)
-    lang_markup.add(
-        types.InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
-        types.InlineKeyboardButton("🇦🇿 Azərbaycan", callback_data="lang_az"),
-        types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
-    )
-    intro_video_id = VIDEO_FILE_IDS.get("intro")
-    if intro_video_id:
-        try:
-            bot.send_video(message.chat.id, intro_video_id)
-        except Exception as e:
-            logging.error(f"Не удалось отправить видео приветствия: {e}")
+    ensure_user_record(user_id)
 
-    sent = bot.send_message(message.chat.id, "Выберите язык / Select language / Dil seçin:", reply_markup=lang_markup)
-    user_data[message.from_user.id] = {"lang_msg": sent.message_id, "state": "awaiting_language"}
+    # Новичок — предлагаем выбор языка и приветственное видео
+    rec = users.get(str(user_id), {})
+    if not rec.get("name"):
+        lang_markup = types.InlineKeyboardMarkup(row_width=3)
+        lang_markup.add(
+            types.InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
+            types.InlineKeyboardButton("🇦🇿 Azərbaycan", callback_data="lang_az"),
+            types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
+        )
+        intro_video_id = VIDEO_FILE_IDS.get("intro")
+        if intro_video_id:
+            try:
+                bot.send_video(message.chat.id, intro_video_id)
+            except Exception as e:
+                logging.error(f"Не удалось отправить видео приветствия: {e}")
 
-@bot.message_handler(commands=['count'])
-def count_users(message):
-    bot.send_message(message.chat.id, f"Всего пользователей: {len(users)}")
-
-@bot.message_handler(func=lambda message: message.chat.type in ["group", "supergroup"])
-def handle_group_messages(message):
-    text_lower = message.text.lower() if message.text else ""
-    if "поиск" in text_lower:
-        bot.reply_to(message, "Чтобы начать обучение, нажми /start или /menu.")
-    elif f"@{bot.get_me().username}" in text_lower:
-        bot.reply_to(message, "Привет! Я бот для обучения. Напиши /start в личку, чтобы начать.")
+        sent = bot.send_message(message.chat.id, "Выберите язык / Select language / Dil seçin:", reply_markup=lang_markup)
+        user_data[user_id] = {"lang_msg": sent.message_id, "state": "awaiting_language"}
+    else:
+        # Повторный старт — сразу меню
+        lang = user_data.get(user_id, {}).get("lang", "ru")
+        name = rec.get("name", "User")
+        send_main_menu(user_id, lang, name)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
+@require_access
 def ask_name(call):
     user_id = call.from_user.id
     lang = call.data.split("_")[1]
@@ -191,22 +331,27 @@ def ask_name(call):
     try:
         bot.answer_callback_query(call.id)
     except Exception as e:
-        print(f"Ошибка при answer_callback_query: {e}")
-@bot.message_handler(func=lambda message: message.from_user.id in user_data and user_data[message.from_user.id].get("state") == "awaiting_name")
+        logging.error(f"answer_callback_query error: {e}")
+
+@bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "awaiting_name")
+@require_access
 def get_name(message):
     user_id = message.from_user.id
-    name = message.text.strip()
+    ensure_user_record(user_id)
+    name = (message.text or "").strip()
+
+    # Сохраняем в users и user_data
+    users[str(user_id)]["name"] = name
+    save_users()
     user_data[user_id]["name"] = name
-    users[str(user_id)] = name
-    with open(users_file, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
 
-    lang = user_data[user_id]["lang"]
-
+    lang = user_data[user_id].get("lang", "ru")
     logging.info(f"User {user_id} named '{name}' started using the bot.")
 
     try:
-        bot.delete_message(message.chat.id, user_data[user_id].get("name_msg", 0))
+        nm = user_data[user_id].get("name_msg", 0)
+        if nm:
+            bot.delete_message(message.chat.id, nm)
         bot.delete_message(message.chat.id, message.message_id)
     except Exception:
         pass
@@ -214,7 +359,7 @@ def get_name(message):
     user_data[user_id]["state"] = "main"
     send_main_menu(user_id, lang, name)
 
-def send_main_menu(user_id, lang, name):
+def send_main_menu(user_id: int, lang: str, name: str):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(texts[lang]["materials"], callback_data="materials"),
@@ -225,7 +370,9 @@ def send_main_menu(user_id, lang, name):
     bot.send_message(user_id, texts[lang]["name_reply"].format(name=name), reply_markup=markup)
     user_data[user_id]["state"] = "main"
 
+# ---------------------------- КНОПКИ ----------------------------
 @bot.callback_query_handler(func=lambda call: True)
+@require_access
 def callback_handler(call):
     user_id = call.from_user.id
     if user_id not in user_data:
@@ -234,8 +381,8 @@ def callback_handler(call):
         return
 
     lang = user_data[user_id].get("lang", "ru")
-    name = user_data[user_id].get("name", "User")
-    state = user_data[user_id].get("state", "main")
+    name = users.get(str(user_id), {}).get("name", "User")
+    # state = user_data[user_id].get("state", "main")
 
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -245,7 +392,7 @@ def callback_handler(call):
     if call.data == "materials":
         markup = types.InlineKeyboardMarkup(row_width=1)
         for key, title in texts[lang]["file_titles"].items():
-            if key not in VIDEO_FILE_IDS:  # Это файлы, которые не видео
+            if key not in VIDEO_FILE_IDS:  # файлы, не видео
                 markup.add(types.InlineKeyboardButton(title, callback_data=f"file_{key}"))
         markup.add(types.InlineKeyboardButton(texts[lang]["back"], callback_data="main_menu"))
         bot.send_message(call.message.chat.id, texts[lang]["choose_file"], reply_markup=markup)
@@ -299,16 +446,21 @@ def callback_handler(call):
     elif call.data == "main_menu":
         send_main_menu(user_id, lang, name)
 
-    bot.answer_callback_query(call.id)
+    # финальный ответ на коллбек
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
 
-@bot.message_handler(func=lambda message: message.from_user.id in user_data and user_data[message.from_user.id].get("state") == "search")
+# ---------------------------- ПОИСК ----------------------------
+@bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "search")
+@require_access
 def handle_search(message):
     user_id = message.from_user.id
     lang = user_data[user_id].get("lang", "ru")
-    query = message.text.lower()
+    query = (message.text or "").lower()
 
     results = []
-
     for key, keywords in search_keywords.items():
         if any(word in query for word in keywords):
             title = texts[lang]["file_titles"].get(key, key)
@@ -325,8 +477,36 @@ def handle_search(message):
 
     user_data[user_id]["state"] = "search"
 
+# ---------------------------- ВЕРИФИКАЦИЯ ПО КОДУ ----------------------------
+@bot.message_handler(func=lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("state") == "awaiting_code")
+def verify_code(message):
+    uid = message.from_user.id
+    ensure_user_record(uid)
+    code = (message.text or "").strip()
+    if ACCESS_CODE and code == ACCESS_CODE:
+        users[str(uid)]["verified"] = True
+        save_users()
+        user_data[uid]["state"] = "main"
+        bot.reply_to(message, "✅ Доступ подтверждён.")
+        # после успешной верификации — запускаем стандартный старт
+        return start(message)
+    else:
+        bot.reply_to(message, "❌ Неверный код. Попробуйте ещё раз.")
+
+# ---------------------------- ГРУППЫ / АДМИН-КОМАНДЫ ----------------------------
+@bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"])
+def handle_group_messages(message):
+    if not ALLOW_GROUPS:
+        return
+    text_lower = (message.text or "").lower()
+    if "поиск" in text_lower:
+        bot.reply_to(message, "Чтобы начать обучение, нажмите /start или /menu.")
+    elif f"@{bot.get_me().username}" in text_lower:
+        bot.reply_to(message, "Привет! Я бот для обучения. Напишите /start в личку, чтобы начать.")
+
 @bot.message_handler(content_types=['new_chat_members'])
 def greet_new_member(message):
+    # это про группы/супергруппы; в личке не потребуется
     for new_member in message.new_chat_members:
         welcome_text = (
             f"👋 Привет, {new_member.first_name}!\n"
@@ -334,7 +514,6 @@ def greet_new_member(message):
             "📌 Чтобы начать обучение, отправьте команду /обучение"
         )
         bot.send_message(message.chat.id, welcome_text)
-
         try:
             bot.send_message(new_member.id, "👋 Приветствуем в обучающем проекте Ploom!\nЧтобы начать, напишите /start.")
         except Exception:
@@ -353,6 +532,7 @@ def admin_only_command(message):
         bot.reply_to(message, "⚠️ Произошла ошибка при проверке прав.")
         logging.error(f"Ошибка в команде /обучение: {e}")
 
+# ---------------------------- ЛОВИМ МЕДИА ----------------------------
 @bot.message_handler(content_types=['video', 'animation', 'document'])
 def handle_media_messages(message):
     if message.video:
@@ -368,8 +548,9 @@ def handle_media_messages(message):
         else:
             bot.send_message(message.chat.id, f"📁 Документ: {file.file_name} (тип: {file.mime_type})")
     else:
-        bot.send_message(message.chat.id, "❗ Пришли видео, GIF или mp4-документ.")
+        bot.send_message(message.chat.id, "❗ Пришлите видео, GIF или mp4-документ.")
 
+# ---------------------------- ЗАПУСК ----------------------------
 if __name__ == "__main__":
     while True:
         try:
@@ -377,9 +558,3 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
-
-
-
-
-
-
