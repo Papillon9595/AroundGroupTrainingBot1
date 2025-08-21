@@ -603,12 +603,15 @@ def handle_media_messages(message):
 
 if __name__ == "__main__":
     try:
-        # На всякий случай снимаем вебхук, иначе Telegram будет конфликтовать с polling
         bot.remove_webhook()
+        me = bot.get_me()
+        print(f"✅ Bot online: @{me.username} (id={me.id})")
     except Exception as e:
-        logging.error(f"remove_webhook error: {e}")
-    # Один-единственный цикл polling:
+        print(f"❌ Startup error: {e}")
+        raise SystemExit(1)
     bot.infinity_polling(skip_pending=True, timeout=60)
+
+
 
 
 
