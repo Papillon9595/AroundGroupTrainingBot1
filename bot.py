@@ -69,6 +69,62 @@ ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 
+# ... импортов и загрузки users.json ...
+
+# ---------------------------- ОКРУЖЕНИЕ ----------------------------
+from dotenv import load_dotenv
+load_dotenv(override=True)           # ← замени на override=True
+TOKEN = os.getenv("BOT_TOKEN")
+...
+bot = telebot.TeleBot(TOKEN, parse_mode=None)
+
+# ==== ВРЕМЕННЫЕ ДИАГНОСТИЧЕСКИЕ КОМАНДЫ ====
+@bot.message_handler(commands=['whoami'])
+def whoami(m):
+    bot.reply_to(m, f"Ваш user_id: {m.from_user.id}")
+
+@bot.message_handler(commands=['env'])
+def env_cmd(m):
+    try:
+        bme = bot.get_me()
+        txt = (
+            "🔎 ENV:\n"
+            f"CHANNEL_ID = {CHANNEL_ID}\n"
+            f"ADMIN_IDS  = {sorted(list(ADMIN_IDS))}\n"
+            f"REQUIRE_CODE = {REQUIRE_CODE}\n"
+            f"ALLOW_GROUPS = {ALLOW_GROUPS}\n"
+            f"BOT (me).id  = {bme.id}\n"
+        )
+        bot.reply_to(m, txt)
+    except Exception as e:
+        bot.reply_to(m, f"Ошибка /env: {e}")
+
+@bot.message_handler(commands=['check_access'])
+def check_access(m):
+    uid = m.from_user.id
+    lines = [f"Проверка доступа для user_id={uid} и бота:"]
+    try:
+        member_me = bot.get_chat_member(CHANNEL_ID, uid)
+        lines.append(f"Вы в канале? status={member_me.status!r}")
+    except Exception as e:
+        lines.append(f"Проверка ВАС: ошибка get_chat_member: {e}")
+
+    try:
+        me = bot.get_me()
+        member_bot = bot.get_chat_member(CHANNEL_ID, me.id)
+        lines.append(f"Бот в канале? status={member_bot.status!r}")
+    except Exception as e:
+        lines.append(f"Проверка БОТА: ошибка get_chat_member: {e}\n"
+                     f"👉 Вероятно, бот НЕ админ канала.")
+
+    bot.reply_to(m, "\n".join(lines))
+# ==== КОНЕЦ ДИАГНОСТИКИ ====
+
+# ---------------------------- ДАННЫЕ КОНТЕНТА ----------------------------
+file_paths = {
+    ...
+}
+
 file_paths = {
     "product": "https://clck.ru/3NB2zY",
     "sales": "https://clck.ru/3NB2wX",
@@ -545,6 +601,7 @@ if __name__ == "__main__":
         except Exception as e:
             logging.error(f"Ошибка подключения к Telegram: {e}")
             time.sleep(10)
+
 
 
 
