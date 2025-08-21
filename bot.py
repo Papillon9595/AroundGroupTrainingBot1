@@ -347,7 +347,16 @@ def get_name(message):
     user_data[user_id]["state"] = "main"
     send_main_menu(user_id, lang, name)
 
-def send_main_menu(user_id: int, lang: str, name: str):
+def send_main_menu(user_id: int, lang: str = None, name: str = None):
+    # восстанавливаем lang/name из хранилищ при необходимости
+    rec = users.get(str(user_id), {})
+    lang = (lang
+            or user_data.get(user_id, {}).get("lang")
+            or "ru")
+    name = (name
+            or user_data.get(user_id, {}).get("name")
+            or rec.get("name", "User"))
+
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton(texts[lang]["materials"], callback_data="materials"),
@@ -356,7 +365,10 @@ def send_main_menu(user_id: int, lang: str, name: str):
         types.InlineKeyboardButton(texts[lang]["search"], callback_data="search")
     )
     bot.send_message(user_id, texts[lang]["name_reply"].format(name=name), reply_markup=markup)
-    user_data[user_id]["state"] = "main"
+
+    # ГАРАНТИРОВАННО создаём сессию в user_data
+    user_data.setdefault(user_id, {})
+    user_data[user_id].update({"state": "main", "lang": lang, "name": name})
 
 @bot.callback_query_handler(func=lambda call: True)
 @require_access
@@ -539,3 +551,4 @@ if __name__ == "__main__":
         print(f"❌ Startup error: {e}")
         raise SystemExit(1)
     bot.infinity_polling(skip_pending=True, timeout=60)
+
