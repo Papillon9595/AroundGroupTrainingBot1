@@ -3,6 +3,9 @@ import os
 import json
 import logging
 from functools import wraps
+import secrets
+import string
+import time
 
 import telebot
 from telebot import types
@@ -68,6 +71,47 @@ ADMIN_IDS = _parse_int_set("ADMIN_IDS")                  # 111,222
 REQUIRE_CODE = os.getenv("REQUIRE_CODE", "0") == "1"     # "1" -> True
 ACCESS_CODE = (os.getenv("ACCESS_CODE") or "").strip()
 ALLOW_GROUPS = os.getenv("ALLOW_GROUPS", "0") == "1"     # "1" -> True
+OTP_TTL_SECS = int(os.getenv("OTP_TTL_SECS", "600"))
+OTP_LENGTH = int(os.getenv("OTP_LENGTH", "6"))
+OTP_ATTEMPTS = int(os.getenv("OTP_ATTEMPTS", "3"))
+# uid -> {'code': '123456', 'exp': ts, 'attempts': 3}
+otp_store = {}
+
+def _gen_otp(length: int) -> str:
+    # только цифры: удобнее на телефоне
+    return "".join(secrets.choice(string.digits) for _ in range(length))
+
+def issue_otp(uid: int) -> str:
+    """Создать и сохранить одноразовый код для пользователя."""
+    code = _gen_otp(OTP_LENGTH)
+    otp_store[uid] = {
+        "code": code,
+        "exp": time.time() + OTP_TTL_SECS,
+        "attempts": OTP_ATTEMPTS,
+    }
+    return code
+
+def check_otp(uid: int, code: str):
+    """
+    Проверить введённый код.
+    Возвращает (ok: bool, msg: str). msg — причина ошибки.
+    """
+    rec = otp_store.get(uid)
+    if not rec:
+        return False, "Код не запрошен. Нажмите «Получить код»."
+    if time.time() > rec["exp"]:
+        otp_store.pop(uid, None)
+        return False, "Код истёк. Запросите новый."
+    if code != rec["code"]:
+        rec["attempts"] -= 1
+        if rec["attempts"] <= 0:
+            otp_store.pop(uid, None)
+            return False, "Код заблокирован из-за попыток. Запросите новый."
+        return False, f"Неверный код. Осталось попыток: {rec['attempts']}"
+    # успех — сжигаем код
+    otp_store.pop(uid, None)
+    return True, ""
+
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
 
@@ -176,22 +220,17 @@ search_keywords = {
 
 # ---------------------------- УТИЛЫ ----------------------------
 def is_member_of_channel(user_id: int) -> bool:
-    """Проверка, состоит ли пользователь в закрытом канале."""
     if not CHANNEL_ID:
         logging.error("CHANNEL_ID не настроен")
         return False
     try:
-        member = bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status in ("member", "administrator", "creator")
-    except ApiTelegramException as e:
-        logging.error(f"get_chat_member error: {e}")
-        return False
+        m = bot.get_chat_member(CHANNEL_ID, user_id)
+        return m.status in ("member", "administrator", "creator")
     except Exception as e:
-        logging.error(f"membership check failed: {e}")
+        logging.error(f"get_chat_member error: {e}")
         return False
 
 def maybe_answer_callback(update):
-    """Безопасно отвечаем на callback, чтобы не было 'query is too old'."""
     try:
         if isinstance(update, TGCallbackQuery):
             bot.answer_callback_query(update.id)
@@ -199,10 +238,10 @@ def maybe_answer_callback(update):
         pass
 
 def require_access(handler):
-    """Декоратор: доступ только для участников канала; при необходимости — запрос кода."""
+    """Доступ только для участников канала. Если включено — требуем код/OTP."""
     @wraps(handler)
     def wrapper(update, *args, **kwargs):
-        # Определение контекста
+        # определим контекст
         if isinstance(update, TGCallbackQuery):
             uid = update.from_user.id
             chat_id = update.message.chat.id
@@ -214,16 +253,24 @@ def require_access(handler):
 
         ensure_user_record(uid)
 
-        # Админам — всегда можно
+        # админам всегда можно
         if uid in ADMIN_IDS:
             return handler(update, *args, **kwargs)
 
-        # Блокируем группы при необходимости
+        # блок групп при необходимости
         if not ALLOW_GROUPS and chat_type in ("group", "supergroup"):
             return
 
-        # 1) Проверка членства
+        # 1) членство в канале
         if not is_member_of_channel(uid):
+            # если был подтверждён — сбросим
+            try:
+                if users.get(str(uid), {}).get("verified"):
+                    users[str(uid)]["verified"] = False
+                    save_users()
+            except Exception:
+                pass
+
             msg = ("Доступ только для участников закрытого канала.\n"
                    "Вступите в канал и вернитесь к боту.")
             if CHANNEL_INVITE_LINK:
@@ -232,20 +279,61 @@ def require_access(handler):
             maybe_answer_callback(update)
             return
 
-        # 2) Если включена проверка кодом — требуем verified
+        # 2) при включённой проверке — требуем verified
         rec = users.get(str(uid), {})
         if REQUIRE_CODE and not rec.get("verified", False):
-            user_data[uid] = user_data.get(uid, {})
+            user_data.setdefault(uid, {})
             user_data[uid]["state"] = "awaiting_code"
-            bot.send_message(chat_id, "🔒 Введите код доступа (из закреплённого сообщения канала):")
+
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("Получить код", callback_data="otp_get"))
+
+            bot.send_message(
+                chat_id,
+                "🔒 Требуется подтверждение доступа.\n"
+                "Нажмите «Получить код», затем введите присланный одноразовый код.",
+                reply_markup=kb
+            )
             maybe_answer_callback(update)
             return
 
-        # Пропускаем внутрь
         return handler(update, *args, **kwargs)
     return wrapper
 
+
 # ---------------------------- КОМАНДЫ ----------------------------
+@bot.callback_query_handler(func=lambda c: c.data == "otp_get")
+def on_otp_get(c):
+    uid = c.from_user.id
+    chat_id = c.message.chat.id
+
+    # выдаём код только членам канала
+    if not is_member_of_channel(uid):
+        try:
+            bot.answer_callback_query(c.id, "Сначала вступите в канал.", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    ensure_user_record(uid)
+    code = issue_otp(uid)
+
+    try:
+        bot.answer_callback_query(c.id, "Код отправлен", show_alert=False)
+    except Exception:
+        pass
+
+    mins = max(1, OTP_TTL_SECS // 60)
+    bot.send_message(
+        chat_id,
+        f"Ваш одноразовый код: **{code}**\n"
+        f"Действует {mins} мин. Введите его одним сообщением.",
+        parse_mode="Markdown"
+    )
+
+    user_data.setdefault(uid, {})
+    user_data[uid]["state"] = "awaiting_code"
+
 @bot.message_handler(commands=['stats', 'count'])
 def send_stats(message):
     total = len(users)
@@ -269,12 +357,13 @@ def set_code(message):
 @bot.message_handler(commands=['menu'])
 @require_access
 def show_menu(message):
-    user_id = message.from_user.id
-    ensure_user_record(user_id)
-    if user_id in user_data:
-        lang = user_data[user_id].get("lang", "ru")
-        name = user_data[user_id].get("name", users.get(str(user_id), {}).get("name", "User"))
-        send_main_menu(user_id, lang, name)
+    uid = message.from_user.id
+    ensure_user_record(uid)
+    rec = users.get(str(uid), {})
+    lang = user_data.get(uid, {}).get("lang", "ru")
+    name = rec.get("name", "User")
+    send_main_menu(uid, lang, name)
+
     else:
         bot.send_message(message.chat.id, "Пожалуйста, введите /start для начала.")
 
@@ -375,9 +464,16 @@ def send_main_menu(user_id: int, lang: str = None, name: str = None):
 def callback_handler(call):
     user_id = call.from_user.id
     if user_id not in user_data:
-        bot.send_message(call.message.chat.id, "Пожалуйста, используйте /start чтобы начать.")
+    # мягко восстановим сессию и покажем меню
+    rec = users.get(str(user_id), {})
+    lang = "ru"
+    name = rec.get("name", "User")
+    send_main_menu(user_id, lang, name)
+    try:
         bot.answer_callback_query(call.id)
-        return
+    except Exception:
+        pass
+    return
 
     lang = user_data[user_id].get("lang", "ru")
     name = users.get(str(user_id), {}).get("name", "User")
@@ -480,14 +576,25 @@ def verify_code(message):
     uid = message.from_user.id
     ensure_user_record(uid)
     code = (message.text or "").strip()
+
+    ok, reason = False, ""
+
+    # (опционально) общий код как бэкап — если не нужен, оставь ACCESS_CODE пустым в переменных
     if ACCESS_CODE and code == ACCESS_CODE:
-        users[str(uid)]["verified"] = True
-        save_users()
-        user_data[uid]["state"] = "main"
-        bot.reply_to(message, "✅ Доступ подтверждён.")
-        return start(message)
+        ok = True
     else:
-        bot.reply_to(message, "❌ Неверный код. Попробуйте ещё раз.")
+        ok, reason = check_otp(uid, code)
+
+    if not ok:
+        bot.reply_to(message, f"❌ {reason}")
+        return
+
+    users[str(uid)]["verified"] = True
+    save_users()
+    user_data[uid]["state"] = "main"
+    bot.reply_to(message, "✅ Доступ подтверждён.")
+    return start(message)
+
 
 # ---------------------------- ГРУППЫ ----------------------------
 @bot.message_handler(func=lambda m: m.chat.type in ["group", "supergroup"])
@@ -551,4 +658,5 @@ if __name__ == "__main__":
         print(f"❌ Startup error: {e}")
         raise SystemExit(1)
     bot.infinity_polling(skip_pending=True, timeout=60)
+
 
