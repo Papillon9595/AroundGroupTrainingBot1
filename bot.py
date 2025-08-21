@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify
 import hmac, hashlib
 import threading
@@ -745,3 +744,4 @@ if __name__ == "__main__":
     except ApiTelegramException as e:
         print(f"❌ Telegram error: {e}")
         raise
+
