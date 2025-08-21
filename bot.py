@@ -602,12 +602,15 @@ def handle_media_messages(message):
         bot.send_message(message.chat.id, "❗ Пришлите видео, GIF или mp4-документ.")
 
 if __name__ == "__main__":
-    while True:
-        try:
-            bot.polling(none_stop=True)
-        except Exception as e:
-            logging.error(f"Ошибка подключения к Telegram: {e}")
-            time.sleep(10)
+    try:
+        # На всякий случай снимаем вебхук, иначе Telegram будет конфликтовать с polling
+        bot.remove_webhook()
+    except Exception as e:
+        logging.error(f"remove_webhook error: {e}")
+    # Один-единственный цикл polling:
+    bot.infinity_polling(skip_pending=True, timeout=60)
+
+
 
 
 
